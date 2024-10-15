@@ -1,11 +1,9 @@
 #!/usr/bin/python3
-'''This script creates a cluster metadata file correlating cluster accession
-numbers with metadata.
-
-Outputs a .csv file with cluster, representative sequence, genotypes, segments
-and hosts
-
-Used as a part of the install.sh script'''
+''' 
+Part of the pipeline installation: creates clustes annotation files.
+Expects unchanged filenames and dirtree, if they are changed they will 
+need to be changed in the scripts
+'''
 
 from flu_utils import metadata_dict,parse_clstr
 from collections import Counter
@@ -13,7 +11,7 @@ import pickle
 
  
 meta=metadata_dict('metadata/flu_metadata_4_.csv',[9,10,12])
-clusters=parse_clstr('clust_db/infDNAClusters.clstr')
+clusters=parse_clstr('cluster_db/infDNAClusters.clstr')
 
 cluster_table={}
 for key in clusters:

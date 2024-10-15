@@ -28,7 +28,7 @@ RUN_DT=$(date +"%Y-%m-%d_%H-%M-%S")
 ID=0.99
 CLUSTER_FASTA=infDNAClusters
 CLUSTER_REFS=cluster_desc.txt
-ENV_NAME=gentools
+ENV_NAME=fluid
 RM_PREV_RUN=true
 
 

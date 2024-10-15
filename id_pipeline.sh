@@ -100,24 +100,28 @@ then
 fi
 
 #CD-HIT RUN
-cd-hit-est-2d -i $CLUSTER_DB/$CLUSTER_FASTA -i2 $SAMPLES_DIR/$SAMPLE -o $RUN_DIR/$OUTNAME -c $ID >>"$SAMPLE-$RUN_DT.stdout" 2>>"$SAMPLE-$RUN_DT.stderr"
+cd-hit-est-2d -i $CLUSTER_DB/$CLUSTER_FASTA -i2 $SAMPLES_DIR/$SAMPLE -o $RUN_DIR/$OUTNAME -c $ID >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
+ 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 #RETURNS ASSIGNMENTS FROM CD-HIT
-python3 clusterAssign.py $RUN_DIR/"$OUTNAME.clstr" $SAMPLES_DIR/$SAMPLE >>"$SAMPLE-$RUN_DT.stdout" 2>>"$SAMPLE-$RUN_DT.stderr"
+python3 clusterAssign.py $RUN_DIR/"$OUTNAME.clstr" $SAMPLES_DIR/$SAMPLE >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
+ 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 
 #GENERATES $SAMPLE_clust.txt report with: sample; ID; Assign_Cluster; Cluster_rep; genotype; segment; host
-python3 clusterCompile.py $RUN_DIR/dict_sample.pkl $RUN_DIR/"$OUTNAME.assign" >>"$SAMPLE-$RUN_DT.stdout" 2>>"$SAMPLE-$RUN_DT.stderr"
+python3 clusterCompile.py $RUN_DIR/dict_sample.pkl $RUN_DIR/"$OUTNAME.assign" >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
+ 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 #MINES THE $SAMPLE_clust.txt REPORT FOR UNASSIGNED SAMPLES
 
-python3 clusterMiner.py "$OUTNAME""_clust.txt" $SAMPLE >>"$SAMPLE-$RUN_DT.stdout" 2>>"$SAMPLE-$RUN_DT.stderr"
+python3 clusterMiner.py "$OUTNAME""_clust.txt" $SAMPLE >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
+ 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 #SINGLE-MATCH BLAST SCRIPT ON UNASSIGNED SAMPLES
 
-python3 bestBlast.py to_blast.fasta  >>"$SAMPLE-$RUN_DT.stdout" 2>>"$SAMPLE-$RUN_DT.stderr"
+python3 bestBlast.py to_blast.fasta  >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout" 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 #CONFORMING DATA IN FINAL REPORT
-python3 reportGenerator.py to_blast_report.txt $OUTNAME  >>"$SAMPLE-$RUN_DT.stdout" 2>>"$SAMPLE-$RUN_DT.stderr"
+python3 reportGenerator.py to_blast_report.txt $OUTNAME  >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout" 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 RUNTIME=$SECONDS
 echo "Script ended in $RUNTIME seconds"

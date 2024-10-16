@@ -121,7 +121,7 @@ python3 clusterMiner.py "$OUTNAME""_clust.txt" $SAMPLE >>$LOGS_DIR/"$SAMPLE-$RUN
 
 python3 bestBlast.py to_blast.fasta  >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout" 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 #CONFORMING DATA IN FINAL REPORT
-python3 reportGenerator.py to_blast_report.txt $OUTNAME  >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout" 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+python3 reportGenerator.py to_blast_report.txt $OUTNAME 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 RUNTIME=$SECONDS
 echo "Script ended in $RUNTIME seconds"

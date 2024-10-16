@@ -11,7 +11,7 @@ Pipeline for Influenza A virus segment and genotype identification though homolg
 ### Procedure
 1. Begin by cloning this repository using the command:
 ```
-git clone AFluID
+git clone https://github.com/jopereira88/AFluID.git
 ```
 2. Then set up a conda environment using the command
 ```

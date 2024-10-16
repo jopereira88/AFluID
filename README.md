@@ -22,7 +22,7 @@ conda env create -f env.yaml
 chmod +x install.sh     #do this the first time to make the file executable
 ./install.sh YOUR_FASTA_FILE.fasta METADATA_FILE.csv
 ``` 
-4. This will create the directory tree and the database files.
+4. This will create the directory tree and the database files. **Depending on the size of you data this step can take a fair bit of time**
 
 ## Running the pipeline
 

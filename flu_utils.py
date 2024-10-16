@@ -56,7 +56,7 @@ def seq_get(filename):
             name=fasta[i].strip()
             seqs[name]=''
         else:
-            seqs[name]+=fasta[i].strip().upper()
+            seqs[name]+=fasta[i].strip().upper().replace('-','')
     return seqs
 
 def seq_filter_get(filename,values):
@@ -358,29 +358,6 @@ def concat_tabular(file_list,output_file):
     with open(output_file,'w') as output:
         for line in outlist:
             output.write(line)
-
-def headers_from_fasta(fasta,only_name=False):
-    '''queries fasta for headers and returns dict: 
-    {Accesion:Name,...} if only_name==False
-    {Accession:Name} if only_name == True
-    Accepts: fasta(str - path to fasta file)
-    only_name (bool): default=False
-    Returns: headers (dict) '''
-    headers={}
-    with open(fasta,'r') as file:
-        lines=file.readlines()
-        for line in lines:
-            if '>' in line:
-                header=line.split('|')
-                header[0]=header[0].replace('>','')
-                header[0]=header[0].replace(' ','')
-                if not only_name:
-                    headers[header][0]=[]
-                    for i in range(1,len(header)):
-                        headers[header][0].append(header[i])
-                else:
-                    headers[header[0]]=header[1]
-    return headers
 
 def headers_from_mult_fas(fasta_list,only_name=False):
     '''queries fasta for headers and returns dict: 

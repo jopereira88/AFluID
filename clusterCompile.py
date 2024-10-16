@@ -1,10 +1,4 @@
 #!/usr/bin/python3
-'''This script creates a report file obtained after assigment of clustered sequences
-
-Outputs a .txt tabular file with sample information, %ID against the cluster_rep_seq,
-cluster, cluster_rep_seq accession number, genotypes, segments and hosts
-
-Used as a part of the bestCluster.sh script'''
 
 from flu_utils import pkl_load
 import sys
@@ -15,10 +9,12 @@ warnings.filterwarnings("ignore", message=".*does not match any known type.*")
 if __name__ == '__main__':
     s_dict=sys.argv[1]
     cl_assign=sys.argv[2]
+#s_dict='runs/dict_sample.pkl'
+#cl_assign='ESIB_EQA_2024_coded.assign'
 db_path='cluster_db/'
 reports_path='reports/'
 dict_sample=pkl_load(s_dict)
-assign=open(cl_assign,'r').readlines()[1:]
+assign=open(f'{cl_assign}','r').readlines()[1:]
 dict_clust=pkl_load(f'{db_path}dict_clusters.pkl')
 
 # Creates sample_assign dict {sample:%ID}

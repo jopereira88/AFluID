@@ -98,7 +98,7 @@ then
 	help
 	exit 1
 fi
-
+################################
 #CD-HIT RUN
 cd-hit-est-2d -i $CLUSTER_DB/$CLUSTER_FASTA -i2 $SAMPLES_DIR/$SAMPLE -o $RUN_DIR/$OUTNAME -c $ID >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
  2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"

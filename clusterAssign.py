@@ -41,7 +41,7 @@ for cl in clusters:
 
 #Parsing .fasta file to find unassigned samples
 headers=headers_from_mult_fas([headers_file],only_name=True)
-unassigned=[item for item in headers if item not in assigned]
+unassigned=[item.strip() for item in headers if item.strip() not in assigned]
 report['Unassigned']=unassigned
 #Creating a samples dict to allow future parsing of sample/cluster relation
 sample_dict={}

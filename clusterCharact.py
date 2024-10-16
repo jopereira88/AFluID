@@ -25,7 +25,7 @@ for elem in cluster_table:
     cluster_table[elem][1]=dict(cluster_table[elem][1])
     cluster_table[elem][2]=dict(cluster_table[elem][2])
 
-clusters=parse_clstr('clust_db/infDNAClusters.clstr',access_only=False)
+clusters=parse_clstr('cluster_db/infDNAClusters.clstr',access_only=False)
 cluster_reps={}
 for cl in clusters:
     rep=[item for item in clusters[cl] if '*' in item]
@@ -33,9 +33,9 @@ for cl in clusters:
 for cl in cluster_table:
     cluster_table[cl].append(cluster_reps[cl])
 
-with open('clust_db/dict_clusters.pkl','wb') as save:
+with open('cluster_db/dict_clusters.pkl','wb') as save:
     pickle.dump(cluster_table,save)
-with open('clust_db/cluster_desc.txt','w') as file:
+with open('cluster_db/cluster_desc.txt','w') as file:
     file.write(f'Cluster\tRepresentative\tGenotypes\tSegments\tHosts\n')
     for elem in cluster_table:
         file.write(f'{elem}\t{cluster_table[elem][3]}\t{cluster_table[elem][0]}\t{cluster_table[elem][1]}\t{cluster_table[elem][2]}\n')

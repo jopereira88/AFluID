@@ -14,7 +14,7 @@ FASTA=$1
 METADATA=$2
 ENV_NAME=fluid
 
-if [ $# -ne 1 ]
+if [ $# -ne 2 ]
 then
     echo "ERROR: Invalid number of elements" >&2
     help

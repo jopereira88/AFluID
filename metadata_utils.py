@@ -174,6 +174,33 @@ class SequenceMetadata(MetadataTable):
                 for i in range(len(self.data[key])):
                     table.write(f'{self.data[key][i]}{self.delim}')
                 table.write('\n')
+    
+    def get_strains_from_organism(self):
+        '''
+        Mines strains into a dict of host, location, strain number, 
+        year of isolation and genotype where strain information is available
+        '''
+        index=self.headers['ORGANISM_NAME']-1
+        report={}
+        pattern=re.compile(r'\(([^/]+)/([^/]+)/([^/]+)/([^/]+)\)',re.IGNORECASE)
+        pattern2=re.compile(r'\(([^/]+)/([^/]+)/([^/]+)/([^/]+)/([^/]+)\)',re.IGNORECASE)
+        for key in self.data:
+            match=pattern.search(self.data[key][index])
+            if match:
+                location=match.group(2)
+                strain_number = match.group(3)
+                year = match.group(4)
+                report[key]=['Homo sapiens',location,strain_number,year]
+        for key in self.data:
+            match=pattern2.search(self.data[key][index])
+            if match:
+                location=match.group(3)
+                strain_number = match.group(4)
+                year = match.group(5)
+                host=match.group(2)
+                report[key]=[host,location,strain_number,year]
+            
+        return report
 
 class ClusterMetadata(MetadataTable):
     def __init__(self, filename: str):

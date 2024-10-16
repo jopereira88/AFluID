@@ -36,3 +36,7 @@ with open(f'reports/{outname}_final_report.txt','w') as report:
         report.write(f'{key}\t{to_report[key][0]}\t\
                      {to_report[key][1]}\t{to_report[key][2]}\t\
                         {to_report[key][3]}\t{to_report[key][4]}\t{to_report[key][5]}\n')
+if len(to_remote)>0:
+    print(f'Following samples were unassigned by local BLAST: {len(to_remote)}\nSample accession numbers:\n')
+    for item in to_remote:
+        print(item)

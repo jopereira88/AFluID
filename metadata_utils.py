@@ -162,7 +162,7 @@ class SequenceMetadata(MetadataTable):
     
     def export_metadata(self,filename:str):
         '''
-        exports metadata to a .csv file tith a specified filename
+        exports metadata to a .csv file with a specified filename
         and filepath
         '''
         with open(filename,'w') as table:

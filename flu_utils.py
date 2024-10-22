@@ -462,7 +462,7 @@ def input_missing_gen_seq(dataframe, dictionary,keydfname,value1dfname,value2=Fa
                 if pd.isna(row['Segment']):
                     dataframe.loc[idx, 'Segment'] = dictionary[key][1]
 
-def dict_to_csv(values_dict,header,filename,sep=','):
+def dict_to_csv(values_dict,filename,header=[],sep=','):
     '''writes to a csv file a dictionary with the 
     row name as the row key and the other values as other 
     columns
@@ -471,9 +471,10 @@ def dict_to_csv(values_dict,header,filename,sep=','):
     filename (str) - path and name of output file
     Outputs: csv file'''
     with open(f'{filename}','w') as csv:
-        for i in header:
-            csv.write(f'{i}{sep}')
-        csv.write('\n')
+        if header != []:    
+            for i in header:
+                csv.write(f'{i}{sep}')
+            csv.write('\n')
         for key in values_dict:
             csv.write(f'{key}{sep}')
             for value in values_dict[key]:

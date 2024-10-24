@@ -13,8 +13,6 @@ if __name__=='__main__':
     sample_fasta=sys.argv[2]
 
 
-#filename='rand_100_0_clust.txt'
-#sample_fasta='rand_100_0.fasta'
 #setting paths
 report_path='reports/'
 fasta_path='samples/'
@@ -51,10 +49,12 @@ to_report={}
 for key in clust_rep.data:
     if key not in to_blast:
         to_report[key]=[]
+        to_report[key].append(clust_rep.data[key][2].replace(' ',''))
+        to_report[key].append(
+            clust_rep.data[key][1].replace('                        >','>'))
         to_report[key].append(clust_rep.data[key][0].replace('%',''))
-        to_report[key].append(clust_rep.data[key][2])
-        to_report[key].append(clust_rep.data[key][3])
         to_report[key].append(clust_rep.data[key][4])
+        to_report[key].append(clust_rep.data[key][3])
         to_report[key].append(clust_rep.data[key][5])
         to_report[key].append('CD-HIT')
 

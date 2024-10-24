@@ -2,6 +2,7 @@
 from abc import ABC, abstractmethod
 import re
 import pickle
+from collections import namedtuple
 
 
 class MetadataTable(ABC):
@@ -92,6 +93,9 @@ class MetadataTable(ABC):
         pass
 
 
+#########################################################################################################################
+
+
 class SequenceMetadata(MetadataTable):
     def __init__(self, filename: str):
         super().__init__(filename, delim=',', key_index=0)
@@ -112,7 +116,7 @@ class SequenceMetadata(MetadataTable):
     
     def update_metadata(self,key:str,field:str,value:str):
         '''
-        Updates metadata values using key list and column to replace values
+        Updates metadata values using key value and column to replace values
         '''
         index=self.headers[field.upper()] - 1
         for i in self.data:
@@ -162,7 +166,7 @@ class SequenceMetadata(MetadataTable):
     
     def export_metadata(self,filename:str):
         '''
-        exports metadata to a .csv file with a specified filename
+        exports metadata to a .csv file tith a specified filename
         and filepath
         '''
         with open(filename,'w') as table:
@@ -174,7 +178,6 @@ class SequenceMetadata(MetadataTable):
                 for i in range(len(self.data[key])):
                     table.write(f'{self.data[key][i]}{self.delim}')
                 table.write('\n')
-    
     def get_strains_from_organism(self):
         '''
         Mines strains into a dict of host, location, strain number, 
@@ -201,6 +204,9 @@ class SequenceMetadata(MetadataTable):
                 report[key]=[host,location,strain_number,year]
             
         return report
+
+
+#############################################################################################################################################################
 
 class ClusterMetadata(MetadataTable):
     def __init__(self, filename: str):
@@ -324,9 +330,39 @@ class ClusterMetadata(MetadataTable):
     def export_metadata(self):
         return super().export_metadata()
 
+###############################################################################################################################################################
+
 class BlastReportTable(MetadataTable):
     def __init__(self, filename:str):
         super().__init__(filename, delim='\t',key_index=0)
+    
+    def load_data(self):
+        '''
+        Compresses the data into best matches before storing into key/value format
+        '''
+        samples = []
+        Sample=namedtuple('Sample',['SAMPLE_ID','BB_ACCESS','PERC_IDENTITY','SEGMENT','GENOTYPE','HOST'])
+        with open(self.filename) as f:
+            lines=f.readlines()
+            for line in lines[1:]:
+                fields=line.strip().split('\t')
+                samples.append(Sample(SAMPLE_ID=fields[0],BB_ACCESS=fields[1],PERC_IDENTITY=fields[2]\
+                                      ,SEGMENT=fields[3],GENOTYPE=fields[4],HOST=fields[5]))
+        to_keep={i.SAMPLE_ID:[] for i in samples}
+        for s in samples:
+            if to_keep[s.SAMPLE_ID]==[]:
+                best=0
+                best=float(s.PERC_IDENTITY)
+                to_keep[s.SAMPLE_ID].append(s.BB_ACCESS)
+                to_keep[s.SAMPLE_ID].append(s.PERC_IDENTITY)
+                to_keep[s.SAMPLE_ID].append(s.SEGMENT)
+                to_keep[s.SAMPLE_ID].append(s.GENOTYPE)
+                to_keep[s.SAMPLE_ID].append(s.HOST)
+            else:
+                if float(s.PERC_IDENTITY)>best:
+                    best=float(s.PERC_IDENTITY)
+                    to_keep[s.SAMPLE_ID]=[s.BB_ACCESS,s.PERC_IDENTITY,s.SEGMENT,s.GENOTYPE,s.HOST]
+        return to_keep
 
     def process_metadata(self):
         return super().process_metadata()
@@ -438,6 +474,9 @@ class BlastReportTable(MetadataTable):
                     if ex2 is not None:
                         n_dict[key].add(ex2.group())
         return n_dict 
+
+
+#################################################################################################################################################################
 
 class ClusterReportTable(MetadataTable):
     def __init__(self, filename:str):
@@ -559,8 +598,8 @@ class ClusterReportTable(MetadataTable):
         return h_dict 
     def extract_n(self):
         '''
-        Extracts the Nx genotype from the genotype field and returns a
-        dict with a set of Nx or Nx+mixed 
+        Extracts the Hx genotype from the genotype field and returns a
+        dict with a set of Hx or Hx+mixed 
         '''
         to_mine=self.get_genotype()
         n_reg=re.compile(r'N\d+',re.IGNORECASE)
@@ -602,7 +641,9 @@ class ClusterReportTable(MetadataTable):
                 for dic in elems:
                     tot=sum(list(dic.values()))
                     for i in dic:
-                        dic[i]=f'{round(dic[i]/tot,5)*100}%'
+                        dic[i]=(dic[i]/tot)
+                        dic[i]=round(dic[i],3)
+                        dic[i]=f'{dic[i] * 100:.3f}%'
                     perc[key]=dic
             except IndexError:
                 continue
@@ -612,28 +653,61 @@ class ClusterReportTable(MetadataTable):
     def export_metadata(self):
         return super().export_metadata()
 
-
 ##############################################################################################################################################
 
+class BlastClustReportTable(ClusterReportTable):
+    def __init__(self, filename:str):
+        super().__init__(filename)
+        self.process_metadata()
+    def load_data(self):
+        '''
+        Compresses the data into best matches before storing into key/value format
+        '''
+        samples = []
+        Sample=namedtuple('Sample',['SAMPLE_ID','CLUSTER_REP','CLUSTER','PERC_IDENTITY','SEGMENT','GENOTYPE','HOST'])
+        with open(self.filename) as f:
+            lines=f.readlines()
+            for line in lines[1:]:
+                fields=line.strip().split('\t')
+                samples.append(Sample(SAMPLE_ID=fields[0],CLUSTER_REP=fields[1],CLUSTER=fields[2],PERC_IDENTITY=fields[3]\
+                                      ,SEGMENT=fields[4].replace(' ',''),GENOTYPE=fields[5].replace(' ',''),HOST=fields[6]))
+        to_keep={i.SAMPLE_ID:[] for i in samples}
+        for s in samples:
+            if to_keep[s.SAMPLE_ID]==[]:
+                best=0
+                best=float(s.PERC_IDENTITY)
+                to_keep[s.SAMPLE_ID].append(s.CLUSTER_REP)
+                to_keep[s.SAMPLE_ID].append(s.CLUSTER)
+                to_keep[s.SAMPLE_ID].append(s.PERC_IDENTITY)
+                to_keep[s.SAMPLE_ID].append(s.SEGMENT)
+                to_keep[s.SAMPLE_ID].append(s.GENOTYPE)
+                to_keep[s.SAMPLE_ID].append(s.HOST)
+            else:
+                if float(s.PERC_IDENTITY)>best:
+                    best=float(s.PERC_IDENTITY)
+                    to_keep[s.SAMPLE_ID]=[s.CLUSTER_REP,s.CLUSTER,s.PERC_IDENTITY,s.SEGMENT,s.GENOTYPE,s.HOST]
+        return to_keep
+    def process_metadata(self):
+        '''
+        Transforms the multi-key fields in dictionaries  
+        '''
+        for key in self.data:
+             for i in range(4,len(self.data[key])):
+                if type(self.data[key][i])==str:
+                    self.data[key][i]=eval(self.data[key][i])
+    def export_metadata(self):
+        return super().export_metadata()
+    def validate_metadata(self):
+        return super().validate_metadata()
+    def extract_h(self):
+        return super().extract_h()
+    def extract_n(self):
+        return super().extract_n()
+    def print_report(self):
+        return super().print_report()
+    def update_metadata(self):
+        return super().update_metadata()
+    def convert_to_prop(self, field):
+        return super().convert_to_prop(field)
 
-""" clust_rep=ClusterReportTable('reports/rand_100_0_report_compiled.txt')
-clust_rep.convert_to_prop('genotypes')
-for key in clust_rep.data:
-    if clust_rep.data[key][0] !='NA':
-        print(clust_rep.data[key][3]) """
-'''
-hemagglutinin=metadata.get_H()
-neuraminidase=metadata.get_N()
-with open('mixedHclusters.pkl','rb') as pkl:
-    H_mixed=pickle.load(pkl)
-with open('mixedNclusters.pkl','rb') as pkl:
-    N_mixed=pickle.load(pkl)
-puremixed={'mixed':0,'assigned':0}
-mixed=[]
-for cluster in H_mixed:
-    if cluster in hemagglutinin.keys():
-        puremixed['assigned']+=1
-        mixed.append(cluster)
-    else:
-        puremixed['mixed']+=1
-'''
+##############################################################################################################################################

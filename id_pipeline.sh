@@ -47,6 +47,10 @@ fi
 if $RM_PREV_RUN;
 then
 	find $RUN_DIR -type f ! -name "*.pkl" -exec rm -f {} +
+    find $SAMPLE_DIR -type f -name "to_blast.fasta" -exec rm -f {} +
+    find $SAMPLE_DIR -type f -name "to_reblast.fasta" -exec rm -f {} +
+    find $REPORTS -type f -name "to_blast_report.txt" -exec rm -f {} +
+    find $REPORTS -type f -name "to_reblast_report.txt" -exec rm -f {} +
 fi
 
 #PATH AND FILE CHECKS
@@ -118,10 +122,18 @@ python3 clusterMiner.py "$OUTNAME""_clust.txt" $SAMPLE >>$LOGS_DIR/"$SAMPLE-$RUN
  2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 #SINGLE-MATCH BLAST SCRIPT ON UNASSIGNED SAMPLES
+if [ -s "$SAMPLES_DIR/to_blast.fasta" ]
+then
+    python3 blastCluster.py to_blast.fasta >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout" 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+    if [ -s "$SAMPLES_DIR/to_reblast.fasta" ]
+    then 
+        python3 bestBlast2.py to_reblast.fasta  >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout" 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+    fi
 
-python3 bestBlast.py to_blast.fasta  >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout" 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+fi
+
 #CONFORMING DATA IN FINAL REPORT
-python3 reportGenerator.py to_blast_report.txt $OUTNAME 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+python3 reportGenerator.py to_blast_bclust_report.txt to_reblast_report.txt $OUTNAME 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 RUNTIME=$SECONDS
 echo "Script ended in $RUNTIME seconds"

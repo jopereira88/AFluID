@@ -81,7 +81,7 @@ def seq_filter_get(filename,values):
                 seqsf[key]=seqs[key]
     return seqsf
 
-def sp_blastn(query,db,outputname='results',outputformat='6',remote=False,createdb=True, maxtargetseqs=1,silent=False):
+def sp_blastn(query,db,outputname='results',outputformat='6',remote=False,createdb=True, maxtargetseqs=1,silent=False, numthreads=1):
     '''Creates a blast db from a nucleotide fasta file and runs a 
     blastn of a query sequence against the db
     Requires: ncbi-blast+ installed locally
@@ -93,6 +93,7 @@ def sp_blastn(query,db,outputname='results',outputformat='6',remote=False,create
     remote(bool) - use with db=nt for blast against NCBI
     createdb(bool) -use to create a local blastDB from a fasta file
     maxtargetseqs(int) - default=1 max aligned seqs
+    numthreads(int) - default=1 number of cpu threads
     Returns: .txt file and contents printed to stdout 
     '''
     dbname=db.split('.')[0]
@@ -101,7 +102,7 @@ def sp_blastn(query,db,outputname='results',outputformat='6',remote=False,create
                      f"{dbname}"])
     if not remote:
         subprocess.run(["blastn", "-query", query, "-db", f"{dbname}", "-out",\
-                     f"{outputname}.txt", "-outfmt", outputformat,"-subject_besthit","-max_target_seqs",f'{maxtargetseqs}'])
+                     f"{outputname}.txt", "-outfmt", outputformat,"-subject_besthit","-max_target_seqs",f'{maxtargetseqs}',"-num_threads",f'{numthreads}'])
     else:
         subprocess.run(["blastn", "-query", query, "-db", f"{dbname}", "-out",\
                      f"{outputname}.txt", "-outfmt", outputformat,"-subject_besthit","-max_target_seqs",f'{maxtargetseqs}'])
@@ -377,7 +378,7 @@ def headers_from_mult_fas(fasta_list,only_name=False):
             for line in lines:
                 if not only_name:   
                     if '>' in line:
-                        header=line.split('|')
+                        header=line.strip().split('|')
                         header[0]=header[0].replace('>','')
                         header[0]=header[0].replace(' ','')
                         headers[header[0]]=[]
@@ -385,7 +386,7 @@ def headers_from_mult_fas(fasta_list,only_name=False):
                             headers[header[0]].append(str(i))
                 else:
                     if '>' in line:
-                        header=line.split('|')
+                        header=line.strip().split('|')
                         header[0]=header[0].replace('>','')
                         header[0]=header[0].replace(' ','')
                         headers.append(header[0])

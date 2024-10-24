@@ -7,7 +7,7 @@ warnings.filterwarnings("ignore", message=".*does not match any known type.*")
 
 
 #Paths
-metadata_path='metadata/flu_metadata_4_.csv'
+metadata_path='metadata/flu_metadata_4.1_flt.csv'
 data_path='samples/'
 db_path='blast_db/sequencesDnaInf'
 run_path='runs/'

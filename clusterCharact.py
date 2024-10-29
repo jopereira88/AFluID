@@ -9,7 +9,6 @@ from flu_utils import metadata_dict,parse_clstr
 from collections import Counter
 import pickle
 
- 
 meta=metadata_dict('metadata/flu_metadata_4.1_flt.csv',[9,10,12])
 clusters=parse_clstr('cluster_db/infDNAClusters.clstr')
 

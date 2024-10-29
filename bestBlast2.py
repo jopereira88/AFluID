@@ -60,7 +60,8 @@ with open(f'{output_path}{fasta_file.split(".")[0]}_report.txt','w') as repo:
                 repo.write(f'{item}\t{j}\t{report[item][j][0]}\t{report[item][j][1]}\t\
                         {report[item][j][2]}\t{report[item][j][3]}\n')
             else:
-                repo.write(f'{item}\t{j}\t{report[item][j][0]}\n')
+                repo.write(f'{item}\t{j}\t{report[item][j]}\t{report[item][j]}\t\
+                           {report[item][j]}\t{report[item][j]}\n')
                
 
 #end_time=time.time()

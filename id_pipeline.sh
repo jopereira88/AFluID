@@ -47,6 +47,7 @@ fi
 if $RM_PREV_RUN;
 then
 	find $RUN_DIR -type f ! -name "*.pkl" -exec rm -f {} +
+    find $RUN_DIR -type f -name "*.pkl" -exec rm -f {} +
     find $SAMPLE_DIR -type f -name "to_blast.fasta" -exec rm -f {} +
     find $SAMPLE_DIR -type f -name "to_reblast.fasta" -exec rm -f {} +
     find $REPORTS -type f -name "to_blast_report.txt" -exec rm -f {} +

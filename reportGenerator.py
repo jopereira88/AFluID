@@ -19,12 +19,11 @@ if __name__=='__main__':
 report_path='reports/'
 to_remote=[]
 if os.path.exists(f'{report_path}{filename1}'):
-    print('report found 1')
     bclust_report=BlastClustReportTable(f'{report_path}{filename1}')
     bclust_report.convert_to_prop('genotype')
     bclust_report.convert_to_prop('host')
     for key in bclust_report.data:
-        if key not in to_report:
+        if key not in to_report and bclust_report.data[key][2]!='NA':
             to_report[key]=[]
             to_report[key].append(bclust_report.data[key][0])
             to_report[key].append(bclust_report.data[key][1])
@@ -34,19 +33,15 @@ if os.path.exists(f'{report_path}{filename1}'):
             to_report[key].append(bclust_report.data[key][5])
             to_report[key].append('C-BLAST')
     if os.path.exists(f'{report_path}{filename2}'):
-        print('report found 2')
         bblast_report=BlastReportTable(f'{report_path}{filename2}')
-        blast_segs=bblast_report.get_segment()
-        blast_gen=bblast_report.get_genotype()
-        blast_host=bblast_report.get_host()
         for key in bblast_report.data:
-            if bblast_report.data[key][0]=='NA':
+            if bblast_report.data[key][1]=='NA':
                 to_remote.append(key)
-            elif key not in to_report:
+            elif key not in to_report and bblast_report.data[key][1]!='NA':
                 to_report[key]=[]
                 to_report[key].append(bblast_report.data[key][0])
-                to_report[key].append(bblast_report.data[key][1])
                 to_report[key].append('UNCLUSTERED')
+                to_report[key].append(bblast_report.data[key][1])
                 to_report[key].append(bblast_report.data[key][2])
                 to_report[key].append(bblast_report.data[key][3])
                 to_report[key].append(bblast_report.data[key][4])

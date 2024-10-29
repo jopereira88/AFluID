@@ -36,21 +36,22 @@ with open(f'{run_path}{fasta_file.split(".")[0]}_run.txt') as tabular:
 
 metadata=ClusterMetadata(metadata_path)
 report={}
-to_reblast=set()
+to_reblast=[]
 for i in queries:
         report[i]={}
         if len(queries[i])>0:
             for j in queries[i]:
                 if float(j[1])<90.0:
-                    to_reblast.add(i)
+                    to_reblast.append(i)
                 else:
                     report[i][j[0]]=[j[1]]
         else:
             report[i]['Unassigned']='NA'
-            to_reblast.add(i)
+            to_reblast.append(i)
+
 for item in to_reblast:
     if item in report.keys():
-        to_reblast.discard(item)
+        to_reblast.remove(item)
 
 #removing clusters 27 and 22681 from the report
 clusters_reps={}

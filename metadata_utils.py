@@ -346,11 +346,14 @@ class BlastReportTable(MetadataTable):
             lines=f.readlines()
             for line in lines[1:]:
                 fields=line.strip().split('\t')
-                samples.append(Sample(SAMPLE_ID=fields[0],BB_ACCESS=fields[1],PERC_IDENTITY=fields[2]\
+                if fields[1]!='Unassigned':
+                    samples.append(Sample(SAMPLE_ID=fields[0],BB_ACCESS=fields[1],PERC_IDENTITY=fields[2]\
                                       ,SEGMENT=fields[3],GENOTYPE=fields[4],HOST=fields[5]))
+                else:
+                    samples.append(Sample(SAMPLE_ID=fields[0],BB_ACCESS=fields[1],PERC_IDENTITY='NA',SEGMENT='NA',GENOTYPE='NA',HOST='NA'))
         to_keep={i.SAMPLE_ID:[] for i in samples}
         for s in samples:
-            if to_keep[s.SAMPLE_ID]==[]:
+            if to_keep[s.SAMPLE_ID]==[] and s.PERC_IDENTITY!='NA':
                 best=0
                 best=float(s.PERC_IDENTITY)
                 to_keep[s.SAMPLE_ID].append(s.BB_ACCESS)
@@ -358,6 +361,8 @@ class BlastReportTable(MetadataTable):
                 to_keep[s.SAMPLE_ID].append(s.SEGMENT)
                 to_keep[s.SAMPLE_ID].append(s.GENOTYPE)
                 to_keep[s.SAMPLE_ID].append(s.HOST)
+            elif to_keep[s.SAMPLE_ID]==[] and s.PERC_IDENTITY=='NA':
+                to_keep[s.SAMPLE_ID]=[s.BB_ACCESS,s.PERC_IDENTITY,s.SEGMENT,s.GENOTYPE,s.HOST]
             else:
                 if float(s.PERC_IDENTITY)>best:
                     best=float(s.PERC_IDENTITY)
@@ -647,6 +652,8 @@ class ClusterReportTable(MetadataTable):
                     perc[key]=dic
             except IndexError:
                 continue
+            except AttributeError:
+                continue
         return perc
 
 
@@ -669,11 +676,14 @@ class BlastClustReportTable(ClusterReportTable):
             lines=f.readlines()
             for line in lines[1:]:
                 fields=line.strip().split('\t')
-                samples.append(Sample(SAMPLE_ID=fields[0],CLUSTER_REP=fields[1],CLUSTER=fields[2],PERC_IDENTITY=fields[3]\
+                if fields[1]!='Unassigned':
+                    samples.append(Sample(SAMPLE_ID=fields[0],CLUSTER_REP=fields[1],CLUSTER=fields[2],PERC_IDENTITY=fields[3]\
                                       ,SEGMENT=fields[4].replace(' ',''),GENOTYPE=fields[5].replace(' ',''),HOST=fields[6]))
+                else:
+                    samples.append(Sample(SAMPLE_ID=fields[0],CLUSTER_REP='NA',CLUSTER='NA',PERC_IDENTITY='NA',SEGMENT='NA',GENOTYPE='NA',HOST='NA'))
         to_keep={i.SAMPLE_ID:[] for i in samples}
         for s in samples:
-            if to_keep[s.SAMPLE_ID]==[]:
+            if to_keep[s.SAMPLE_ID]==[] and s.PERC_IDENTITY!='NA':
                 best=0
                 best=float(s.PERC_IDENTITY)
                 to_keep[s.SAMPLE_ID].append(s.CLUSTER_REP)
@@ -682,6 +692,8 @@ class BlastClustReportTable(ClusterReportTable):
                 to_keep[s.SAMPLE_ID].append(s.SEGMENT)
                 to_keep[s.SAMPLE_ID].append(s.GENOTYPE)
                 to_keep[s.SAMPLE_ID].append(s.HOST)
+            elif to_keep[s.SAMPLE_ID]==[] and s.PERC_IDENTITY =='NA':
+                to_keep[s.SAMPLE_ID]=[s.CLUSTER_REP,s.CLUSTER,s.PERC_IDENTITY,s.SEGMENT,s.GENOTYPE,s.HOST]
             else:
                 if float(s.PERC_IDENTITY)>best:
                     best=float(s.PERC_IDENTITY)
@@ -693,8 +705,11 @@ class BlastClustReportTable(ClusterReportTable):
         '''
         for key in self.data:
              for i in range(4,len(self.data[key])):
-                if type(self.data[key][i])==str:
-                    self.data[key][i]=eval(self.data[key][i])
+                try:
+                    if type(self.data[key][i])==str:
+                        self.data[key][i]=eval(self.data[key][i])
+                except NameError:
+                    self.data[key][i]=str(self.data[key][i])
     def export_metadata(self):
         return super().export_metadata()
     def validate_metadata(self):

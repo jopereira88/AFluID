@@ -514,6 +514,20 @@ def mine_genotype(dict):
                 gen_dict[key] = 'Unknown'
     return gen_dict
 
+def int_to_iupac(value):
+    '''
+    Converts a segment integer value into the IUPAC acronym
+    Args: value(str or int) between 1 and 8
+    Returns: str - IUPAC acronym for the segment 
+    '''
+    iupac={1:'PB2', 2: 'PB1', 3:'PA', 4:'HA', 5:'NP',6:'NA',7:'MP',8:'NS'}
+    try:
+        return iupac[int(value)]
+    except KeyError:
+        print(f"Invalid segment value: {value}, expected 1 to 8")
+
+
+
 """ seg_dict=pkl_load('seg_dict.pkl')
 mined_gen=mine_genotype(seg_dict)
 mined_seg=mine_segment(seg_dict)"""

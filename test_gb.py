@@ -20,7 +20,7 @@ def fetch_genbank(access, file_name, db='nucleotide',start_acc=None,write_mode='
         with open(file_name, write_mode) as output:
             if start_acc:
                 for i, acc in enumerate(access[access.index(start_acc):]):
-                    if i//5000 == 0:
+                    if i%5000 == 0 and i!=0:
                         sleep(300)
                         with Entrez.efetch(db=db,id=acc, rettype='gb',retmode='text') as handle:
                             data=handle.read()
@@ -31,7 +31,7 @@ def fetch_genbank(access, file_name, db='nucleotide',start_acc=None,write_mode='
                             output.write(data)    
             else:
                 for i, acc in enumerate(access):
-                    if i//5000==0:
+                    if i%5000 == 0 and i!=0:
                         sleep(300)
                         with Entrez.efetch(db=db,id=acc, rettype='gb',retmode='text') as handle:
                             data=handle.read()
@@ -152,10 +152,9 @@ def check_missing(gb_file,accession_list):
         return list(missing)
 
 
-accessions=headers_from_mult_fas(['sequencesDnaInf.fasta'],only_name=True)
-missing=pkl_load('acc_to_entrez.pkl')
+missing=pkl_load('reps.pkl')
 #filter_genbank_by_accession('sequence.gb','sequencesDnaInf_test.gb',accessions)
-failed=fetch_genbank(missing,'sequencesDnaInf_1.gb')
+failed=fetch_genbank(missing,'sequencesDnaInf.gb')
 #append_genbank_from_gb('sequencesDnaInf_test.gb','sequencesDnaInf_1.gb',verbose=True)
 
 pkl_save(failed,'acc_to_entrez')

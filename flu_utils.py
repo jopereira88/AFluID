@@ -54,6 +54,7 @@ def seq_get(filename):
     for i in range(len(fasta)):
         if '>' in fasta[i]:
             name=fasta[i].strip()
+            name=name.replace(' ','_').replace(';','_')
             seqs[name]=''
         else:
             seqs[name]+=fasta[i].strip().upper().replace('-','')
@@ -360,15 +361,17 @@ def concat_tabular(file_list,output_file):
         for line in outlist:
             output.write(line)
 
-def headers_from_mult_fas(fasta_list,only_name=False):
+def headers_from_mult_fas(fasta_list,only_name=False,out_list=False):
     '''queries fasta for headers and returns dict: 
     {Accesion:Name,...} if only_name==False
     {Accession:Name} if only_name == True
     Accepts: fasta(str - path to fasta file)
     only_name (bool): default=False
     Returns: headers (dict) '''
-    if not only_name:
+    if not only_name and not out_list:
         headers={}
+    elif not only_name and out_list:
+        headers=[]
     else:
         headers=[]
         
@@ -376,19 +379,27 @@ def headers_from_mult_fas(fasta_list,only_name=False):
         with open(fasta,'r') as file:
             lines=file.readlines()
             for line in lines:
-                if not only_name:   
+                if not only_name and not out_list:   
                     if '>' in line:
                         header=line.strip().split('|')
                         header[0]=header[0].replace('>','')
                         header[0]=header[0].replace(' ','')
+                        header[0]=header[0].replace(';','_')
                         headers[header[0]]=[]
                         for i in range(1,len(header)):
                             headers[header[0]].append(str(i))
+                elif out_list and not only_name:
+                    if '>' in line:
+                        header=line.strip()
+                        header=header.replace('>','')
+                        header=header.replace(' ','_')
+                        headers.append(header)
                 else:
                     if '>' in line:
                         header=line.strip().split('|')
                         header[0]=header[0].replace('>','')
                         header[0]=header[0].replace(' ','')
+                        header[0]=header[0].replace(';','_')
                         headers.append(header[0])
     return headers
 

@@ -36,6 +36,7 @@ for cl in clusters:
                 name=name.replace('|','')
                 id=i.split(' ')[3]
                 id=id.replace('+/','')
+                id=id.replace('-/','')
                 assigned.append(name)
                 report[cl].append((name,id))
 
@@ -47,7 +48,8 @@ report['Unassigned']=unassigned
 sample_dict={}
 for header in headers:
     header=header.replace('|','')
-    header=header.replace(' ','')
+    header=header.replace(' ','_')
+    header=header.replace(';','_')
     header=header.replace('>','')  
     sample_dict[header]=''
 for key in report:   

@@ -8,11 +8,13 @@ from metadata_utils import BlastReportTable, BlastClustReportTable
 
 ###################################################################
 runs_dir='runs/'
+samples_dir='samples/'
 to_report=pkl_load(f'{runs_dir}assigned.pkl')
 if __name__=='__main__':
     filename1=sys.argv[1]
     filename2=sys.argv[2]
     outname=sys.argv[3]
+
 #filename1='format_EISN_INF_EQA_coded_bclust_report.txt'
 #filename2='format_EISN_INF_EQA_coded_blast_report.txt'
 #outname='test_report.txt'
@@ -46,11 +48,12 @@ if os.path.exists(f'{report_path}{filename1}'):
                 to_report[key].append(bblast_report.data[key][3])
                 to_report[key].append(bblast_report.data[key][4])
                 to_report[key].append('L-BLAST')
-
-with open(f'reports/{outname}_final_report.txt','w') as report:
+mappings=pkl_load(f'{samples_dir}{outname}_mappings.pkl')
+with open(f'{report_path}{outname}_final_report.txt','w') as report:
         report.write('SAMPLE_NAME\tREPRESENTATIVE\tCLUSTER\t%ID\tSEGMENT\tGENOTYPE\tHOST\tASSIGNED_BY\n')
         for key in to_report:
-            report.write(f'{key}\t{to_report[key][0]}\t\
+            mapped=mappings[f'>{key}']
+            report.write(f'{mapped}\t{to_report[key][0]}\t\
                          {to_report[key][1]}\t{to_report[key][2]}\t{to_report[key][3]}\t\
                             {to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\n')
 if len(to_remote)>0:

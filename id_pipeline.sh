@@ -104,22 +104,25 @@ then
 	exit 1
 fi
 ################################
+#PREPROCESSING FASTA FILE
+python3 fastaPreprocess.py $SAMPLES_DIR/$SAMPLE
+
 #CD-HIT RUN
-cd-hit-est-2d -i $CLUSTER_DB/$CLUSTER_FASTA -i2 $SAMPLES_DIR/$SAMPLE -o $RUN_DIR/$OUTNAME -c $ID >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
+cd-hit-est-2d -i $CLUSTER_DB/$CLUSTER_FASTA -i2 $SAMPLES_DIR/"format_$SAMPLE" -o $RUN_DIR/format_$OUTNAME -c $ID >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
  2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 #RETURNS ASSIGNMENTS FROM CD-HIT
-python3 clusterAssign.py $RUN_DIR/"$OUTNAME.clstr" $SAMPLES_DIR/$SAMPLE >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
+python3 clusterAssign.py $RUN_DIR/"format_$OUTNAME.clstr" $SAMPLES_DIR/"format_$SAMPLE" >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
  2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 
 #GENERATES $SAMPLE_clust.txt report with: sample; ID; Assign_Cluster; Cluster_rep; genotype; segment; host
-python3 clusterCompile.py $RUN_DIR/dict_sample.pkl $RUN_DIR/"$OUTNAME.assign" >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
+python3 clusterCompile.py $RUN_DIR/dict_sample.pkl $RUN_DIR/"format_$OUTNAME.assign" >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
  2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 #MINES THE $SAMPLE_clust.txt REPORT FOR UNASSIGNED SAMPLES
 
-python3 clusterMiner.py "$OUTNAME""_clust.txt" $SAMPLE >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
+python3 clusterMiner.py "format_$OUTNAME""_clust.txt" "format_$SAMPLE" >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
  2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 #SINGLE-MATCH BLAST SCRIPT ON UNASSIGNED SAMPLES
@@ -133,8 +136,19 @@ then
 
 fi
 
-#CONFORMING DATA IN FINAL REPORT
+#CONFORMING DATA IN FINAL REPORT ID REPORT
 python3 reportGenerator.py to_blast_bclust_report.txt to_reblast_report.txt $OUTNAME 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
+#CONFORMING DATA TO FLUMUT
+python3 conformToFlumut.py "format_$SAMPLE"
+
+#RUNNING FLUMUT
+
+flumut -m $REPORTS/"$OUTNAME"_markers.tsv -M $REPORTS/"$OUTNAME"_mutations.tsv -l $REPORTS/"$OUTNAME"_literature.tsv $SAMPLES_DIR/"to_flumut.fasta" -n "(.+)\|(.+)"
+
+#REMAPPING FLUMUT REPORTS
+python3 reportRemapping.py $OUTNAME
+
+################################################################
 RUNTIME=$SECONDS
 echo "Script ended in $RUNTIME seconds"

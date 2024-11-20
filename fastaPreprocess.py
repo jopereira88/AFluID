@@ -33,6 +33,6 @@ samples_path='samples/'
 runs_path='runs/'
 outname=filename.split('/')[-1]
 outname=outname.replace('.fasta','')
-outname='format_'+outname
-dict_to_fasta(out_dict, f'{samples_path}{outname}')
+outname_fasta='format_'+outname
+dict_to_fasta(out_dict, f'{samples_path}{outname_fasta}')
 pkl_save(header_mapping, f'{samples_path}{outname}_mappings')

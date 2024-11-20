@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-from flu_utils import pkl_load
+from flu_utils import pkl_load, pkl_save
 import sys
 import os
 from metadata_utils import BlastReportTable, BlastClustReportTable
@@ -49,7 +49,10 @@ if os.path.exists(f'{report_path}{filename1}'):
                 to_report[key].append(bblast_report.data[key][4])
                 to_report[key].append('L-BLAST')
 mappings=pkl_load(f'{samples_dir}{outname}_mappings.pkl')
-with open(f'{report_path}{outname}_final_report.txt','w') as report:
+
+pkl_save(to_report,f'{runs_dir}to_flumut')
+
+with open(f'{report_path}{outname}_ID_report.txt','w') as report:
         report.write('SAMPLE_NAME\tREPRESENTATIVE\tCLUSTER\t%ID\tSEGMENT\tGENOTYPE\tHOST\tASSIGNED_BY\n')
         for key in to_report:
             mapped=mappings[f'>{key}']

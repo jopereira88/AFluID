@@ -30,6 +30,7 @@ CLUSTER_FASTA=infDNAClusters
 CLUSTER_REFS=cluster_desc.txt
 ENV_NAME=fluid
 RM_PREV_RUN=true
+FLUMUT=true
 
 
 #CREATING LOG AND ERROR LOG FILES
@@ -139,16 +140,18 @@ fi
 #CONFORMING DATA IN FINAL REPORT ID REPORT
 python3 reportGenerator.py to_blast_bclust_report.txt to_reblast_report.txt $OUTNAME 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
-#CONFORMING DATA TO FLUMUT
-python3 conformToFlumut.py "format_$SAMPLE"
+if $FLUMUT; 
+then
+    #CONFORMING DATA TO FLUMUT
+    python3 conformToFlumut.py "format_$SAMPLE"
 
-#RUNNING FLUMUT
+    #RUNNING FLUMUT
+    echo "Running flumut"
+    flumut -m $REPORTS/"$OUTNAME"_markers.tsv -M $REPORTS/"$OUTNAME"_mutations.tsv -l $REPORTS/"$OUTNAME"_literature.tsv $SAMPLES_DIR/"to_flumut.fasta" -n "(.+)\|(.+)"
 
-flumut -m $REPORTS/"$OUTNAME"_markers.tsv -M $REPORTS/"$OUTNAME"_mutations.tsv -l $REPORTS/"$OUTNAME"_literature.tsv $SAMPLES_DIR/"to_flumut.fasta" -n "(.+)\|(.+)"
-
-#REMAPPING FLUMUT REPORTS
-python3 reportRemapping.py $OUTNAME
-
+    #REMAPPING FLUMUT REPORTS
+    python3 reportRemapping.py $OUTNAME
+fi 
 ################################################################
 RUNTIME=$SECONDS
 echo "Script ended in $RUNTIME seconds"

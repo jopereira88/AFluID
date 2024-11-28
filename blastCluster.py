@@ -15,7 +15,7 @@ output_path='reports/'
 if __name__ == '__main__':
     fasta_file=sys.argv[1]
 
-#fasta_file='format_EISN_INF_EQA_coded.fasta' #for direct script access
+#fasta_file='to_blast.fasta' #for direct script access
 
 #priming sample names
 access=headers_from_mult_fas([f'{data_path}{fasta_file}'],only_name=True)
@@ -53,21 +53,13 @@ for item in to_reblast:
     if item in report.keys():
         to_reblast.remove(item)
 
-#removing clusters 27 and 22681 from the report
 clusters_reps={}
 for cluster in metadata.data:
     for i in report.values():
         for key in i.keys():
             if metadata.data[cluster][metadata.headers['REPRESENTATIVE']-1]==key:
                 clusters_reps[key]=cluster
-keys_to_remove=set()
-for key in clusters_reps:
-    if clusters_reps[key] == '>Cluster 27' or clusters_reps[key] == '>Cluster 22681':
-        keys_to_remove.add(key)
-for key in keys_to_remove:
-    for i in report:
-        if report[i].get(key):
-            del report[i][key]
+
 for key in report:
     for rep in clusters_reps:
         if rep in report[key]:

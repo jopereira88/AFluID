@@ -60,6 +60,8 @@ def seq_get(filename):
             seqs[name]+=fasta[i].strip().upper().replace('-','')
     return seqs
 
+
+
 def seq_filter_get(filename,values):
     '''Parses fasta file and returns accession numbers and sequences
     Accepts: filename -  a string for the path of the fasta file
@@ -81,6 +83,22 @@ def seq_filter_get(filename,values):
             if val.upper() in key.upper():
                 seqsf[key]=seqs[key]
     return seqsf
+
+def remove_seq_from_fasta(filename, output_path, access: list):
+    """
+    Remove sequences from a FASTA file based on a list of accession numbers using BioPython.
+
+    Parameters:
+        filename (str): Path to the input FASTA file.
+        output_path (str): Path to the output FASTA file.
+        accession_to_remove (list): List of accession numbers to remove.
+
+    Returns:
+        None
+    """
+    sequences = SeqIO.parse(filename,"fasta")
+    filtered_sequences= (seq for seq in sequences if seq.id not in access)
+    SeqIO.write(filtered_sequences, output_path, "fasta")
 
 def sp_blastn(query,db,outputname='results',outputformat='6',remote=False,createdb=True, maxtargetseqs=1,silent=False, numthreads=1):
     '''Creates a blast db from a nucleotide fasta file and runs a 
@@ -229,6 +247,7 @@ def parse_clstr(filename, access_only=True):
                     line=line[1]
                     line=line.replace('...','')
                     line=line.replace('>','')
+                    line=line.split('_|')[0]
                     clusters[current_cluster].append(line)
     return clusters
 

@@ -66,4 +66,8 @@ cd-hit-est -i $FASTA -o ./cluster_db/infDNAClusters -c 0.99 -M 5000
 
 echo "Creating cluster annotation file"
 
-python3 clusterCharact.py 
+python3 clusterCharact.py
+
+echo "Creating representative BLAST db"
+
+makeblastdb -in ./cluster_db/infDNAClusters -dbtype nucl -out ./blast_db/infDNAClusters

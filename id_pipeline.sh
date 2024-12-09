@@ -30,7 +30,7 @@ CLUSTER_FASTA=infDNAClusters
 CLUSTER_REFS=cluster_desc.txt
 ENV_NAME=fluid
 RM_PREV_RUN=true
-FLUMUT=true
+FLUMUT=false
 
 
 #CREATING LOG AND ERROR LOG FILES

@@ -54,7 +54,7 @@ def seq_get(filename):
     for i in range(len(fasta)):
         if '>' in fasta[i]:
             name=fasta[i].strip()
-            name=name.replace(' ','_').replace(';','_')
+            name=name.replace(';','_')
             seqs[name]=''
         else:
             seqs[name]+=fasta[i].strip().upper().replace('-','')

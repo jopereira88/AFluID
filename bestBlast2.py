@@ -15,7 +15,7 @@ output_path='reports/'
 if __name__ == '__main__':
     fasta_file=sys.argv[1]
 
-#fasta_file='rand_100_3.fasta' #for direct script access
+#fasta_file='to_reblast.fasta' #for direct script access
 
 #priming sample names
 access=headers_from_mult_fas([f'{data_path}{fasta_file}'],only_name=True)

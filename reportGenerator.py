@@ -13,10 +13,10 @@ to_report=pkl_load(f'{runs_dir}assigned.pkl')
 if __name__=='__main__':
     filename1=sys.argv[1]
     filename2=sys.argv[2]
-    outname=sys.argv[3]
+    outname=sys.argv[3] 
 
-#filename1='format_EISN_INF_EQA_coded_bclust_report.txt'
-#filename2='format_EISN_INF_EQA_coded_blast_report.txt'
+#filename1='to_blast_bclust_report.txt'
+#filename2='to_reblast_report.txt'
 #outname='test_report.txt'
 report_path='reports/'
 to_remote=[]
@@ -37,6 +37,7 @@ if os.path.exists(f'{report_path}{filename1}'):
     if os.path.exists(f'{report_path}{filename2}'):
         bblast_report=BlastReportTable(f'{report_path}{filename2}')
         for key in bblast_report.data:
+            print(bblast_report.data[key])
             if bblast_report.data[key][1]=='NA':
                 to_remote.append(key)
             elif key not in to_report and bblast_report.data[key][1]!='NA':
@@ -44,8 +45,8 @@ if os.path.exists(f'{report_path}{filename1}'):
                 to_report[key].append(bblast_report.data[key][0])
                 to_report[key].append('UNCLUSTERED')
                 to_report[key].append(bblast_report.data[key][1])
-                to_report[key].append(bblast_report.data[key][2])
-                to_report[key].append(bblast_report.data[key][3])
+                to_report[key].append(bblast_report.data[key][2].replace(' ',''))
+                to_report[key].append(bblast_report.data[key][3].replace(' ',''))
                 to_report[key].append(bblast_report.data[key][4])
                 to_report[key].append('L-BLAST')
 mappings=pkl_load(f'{samples_dir}{outname}_mappings.pkl')
@@ -56,7 +57,7 @@ with open(f'{report_path}{outname}_ID_report.txt','w') as report:
         report.write('SAMPLE_NAME\tREPRESENTATIVE\tCLUSTER\t%ID\tSEGMENT\tGENOTYPE\tHOST\tASSIGNED_BY\n')
         for key in to_report:
             mapped=mappings[f'>{key}']
-            report.write(f'{mapped}\t{to_report[key][0]}\t\
+            report.write(f'{key}\t{to_report[key][0]}\t\
                          {to_report[key][1]}\t{to_report[key][2]}\t{to_report[key][3]}\t\
                             {to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\n')
 if len(to_remote)>0:

@@ -21,7 +21,7 @@ if __name__ == '__main__':
 access=headers_from_mult_fas([f'{data_path}{fasta_file}'],only_name=True)
 queries={key:[] for key in access}
 print('Starting BLASTn')
-sp_blastn(f'{data_path}{fasta_file}',db_path,f'{run_path}{fasta_file.split(".")[0]}_run',createdb=False,silent=True,maxtargetseqs=7,numthreads=1)
+sp_blastn(f'{data_path}{fasta_file}',db_path,f'{run_path}{fasta_file.split(".")[0]}_run',createdb=False,silent=True,maxtargetseqs=7,numthreads=2)
 print('Ending BLASTn')
 #creating the run dictionary
 with open(f'{run_path}{fasta_file.split(".")[0]}_run.txt') as tabular:
@@ -40,15 +40,16 @@ for i in queries:
         report[i]={}
         if len(queries[i])>0:
             for j in queries[i]:
-                report[i][j[0]]=[j[1]]
+                report[i][j[0].replace(' ','')]=[j[1]]
         else:
             report[i]['Unassigned']='NA'
 for key in report:
     for i in report[key]:
-        if i !='Unassigned':
+        if report[key][i][0] !='Unassigned':
                 report[key][i].append(metadata.data[i][metadata.headers['SEGMENT']-1])
                 report[key][i].append(metadata.data[i][metadata.headers['GENOTYPE']-1])
                 report[key][i].append(metadata.data[i][metadata.headers['HOST']-1])
+
 
 
 #outputing report
@@ -62,7 +63,7 @@ with open(f'{output_path}{fasta_file.split(".")[0]}_report.txt','w') as repo:
             else:
                 repo.write(f'{item}\t{j}\t{report[item][j]}\t{report[item][j]}\t\
                            {report[item][j]}\t{report[item][j]}\n')
-               
+           
 
 #end_time=time.time()
 #exec_time=end_time-start_time

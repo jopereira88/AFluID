@@ -21,7 +21,7 @@ if __name__ == '__main__':
 access=headers_from_mult_fas([f'{data_path}{fasta_file}'],only_name=True)
 queries={key:[] for key in access}
 print('Starting BLASTn')
-sp_blastn(f'{data_path}{fasta_file}',db_path,f'{run_path}{fasta_file.split(".")[0]}_run',createdb=False,silent=True,maxtargetseqs=7)
+sp_blastn(f'{data_path}{fasta_file}',db_path,f'{run_path}{fasta_file.split(".")[0]}_run',createdb=False,silent=True,maxtargetseqs=7,numthreads=2)
 print('Ending BLASTn')
 #creating the run dictionary
 with open(f'{run_path}{fasta_file.split(".")[0]}_run.txt') as tabular:

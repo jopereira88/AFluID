@@ -12,9 +12,10 @@ help(){
 
 FASTA=$1
 METADATA=$2
+GBREF=$3
 ENV_NAME=fluid
 
-if [ $# -ne 2 ]
+if [ $# -ne 3 ]
 then
     echo "ERROR: Invalid number of elements" >&2
     help
@@ -53,8 +54,13 @@ if [ ! -d "metadata" ]
 then
 mkdir metadata
 fi
+if [ ! -d "references" ]
+then
+mkdir references
+fi
 
 mv $METADATA metadata
+mv $GBREF references
 
 echo "Creating BLAST database"
 

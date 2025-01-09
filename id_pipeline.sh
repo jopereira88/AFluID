@@ -20,6 +20,7 @@ REPORTS=./reports
 SAMPLES_DIR=./samples
 LOGS_DIR=./logs
 RUN_DIR=./runs
+REF_DIR=./references
 
 #ARGS
 SAMPLE=$1
@@ -30,7 +31,10 @@ CLUSTER_FASTA=infDNAClusters
 CLUSTER_REFS=cluster_desc.txt
 ENV_NAME=fluid
 RM_PREV_RUN=true
-FLUMUT=false
+FLUMUT=true
+REFERENCES=true
+REF_DB=refDb.gb
+EMAIL=None #ENTREZ EMAIL
 
 
 #CREATING LOG AND ERROR LOG FILES
@@ -113,32 +117,29 @@ cd-hit-est-2d -i $CLUSTER_DB/$CLUSTER_FASTA -i2 $SAMPLES_DIR/"format_$SAMPLE" -o
  2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 #RETURNS ASSIGNMENTS FROM CD-HIT
-python3 clusterAssign.py $RUN_DIR/"format_$OUTNAME.clstr" $SAMPLES_DIR/"format_$SAMPLE" >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
- 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+python3 clusterAssign.py $RUN_DIR/"format_$OUTNAME.clstr" 
 
 
 #GENERATES $SAMPLE_clust.txt report with: sample; ID; Assign_Cluster; Cluster_rep; genotype; segment; host
-python3 clusterCompile.py $RUN_DIR/dict_sample.pkl $RUN_DIR/"format_$OUTNAME.assign" >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
- 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+python3 clusterCompile.py $RUN_DIR/dict_sample.pkl $RUN_DIR/"format_$OUTNAME.assign"
 
 #MINES THE $SAMPLE_clust.txt REPORT FOR UNASSIGNED SAMPLES
 
-python3 clusterMiner.py "format_$OUTNAME""_clust.txt" "format_$SAMPLE" >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout"\
- 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+python3 clusterMiner.py "format_$OUTNAME""_clust.txt" "format_$SAMPLE"
 
 #SINGLE-MATCH BLAST SCRIPT ON UNASSIGNED SAMPLES
 if [ -s "$SAMPLES_DIR/to_blast.fasta" ]
 then
-    python3 blastCluster.py to_blast.fasta >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout" 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+    python3 blastCluster.py to_blast.fasta 
     if [ -s "$SAMPLES_DIR/to_reblast.fasta" ]
     then 
-        python3 bestBlast2.py to_reblast.fasta  >>$LOGS_DIR/"$SAMPLE-$RUN_DT.stdout" 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+        python3 bestBlast2.py to_reblast.fasta  
     fi
 
 fi
 
 #CONFORMING DATA IN FINAL REPORT ID REPORT
-python3 reportGenerator.py to_blast_bclust_report.txt to_reblast_report.txt $OUTNAME 2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
+python3 reportGenerator.py to_blast_bclust_report.txt to_reblast_report.txt 
 
 if $FLUMUT; 
 then
@@ -152,6 +153,13 @@ then
     #REMAPPING FLUMUT REPORTS
     python3 reportRemapping.py $OUTNAME
 fi 
+
+#FETCHING REFERENCES
+if $REFERENCES;
+then
+    python3 getReference.py "$OUTNAME"_ID_report.txt $REF_DB $EMAIL 
+fi
+
 ################################################################
 RUNTIME=$SECONDS
 echo "Script ended in $RUNTIME seconds"

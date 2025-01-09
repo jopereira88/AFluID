@@ -37,7 +37,6 @@ if os.path.exists(f'{report_path}{filename1}'):
     if os.path.exists(f'{report_path}{filename2}'):
         bblast_report=BlastReportTable(f'{report_path}{filename2}')
         for key in bblast_report.data:
-            print(bblast_report.data[key])
             if bblast_report.data[key][1]=='NA':
                 to_remote.append(key)
             elif key not in to_report and bblast_report.data[key][1]!='NA':
@@ -57,10 +56,10 @@ with open(f'{report_path}{outname}_ID_report.txt','w') as report:
         report.write('SAMPLE_NAME\tREPRESENTATIVE\tCLUSTER\t%ID\tSEGMENT\tGENOTYPE\tHOST\tASSIGNED_BY\n')
         for key in to_report:
             mapped=mappings[f'>{key}']
-            report.write(f'{key}\t{to_report[key][0]}\t\
+            report.write(f'{mapped}\t{to_report[key][0]}\t\
                          {to_report[key][1]}\t{to_report[key][2]}\t{to_report[key][3]}\t\
                             {to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\n')
 if len(to_remote)>0:
     print(f'Following samples were unassigned by local BLAST: {len(to_remote)}\nSample accession numbers:')
     for item in to_remote:
-        print(item)
+        print(mappings[f'>{item}'])

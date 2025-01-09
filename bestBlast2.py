@@ -45,7 +45,7 @@ for i in queries:
             report[i]['Unassigned']='NA'
 for key in report:
     for i in report[key]:
-        if report[key][i][0] !='Unassigned':
+        if report[key][i]!='NA':
                 report[key][i].append(metadata.data[i][metadata.headers['SEGMENT']-1])
                 report[key][i].append(metadata.data[i][metadata.headers['GENOTYPE']-1])
                 report[key][i].append(metadata.data[i][metadata.headers['HOST']-1])

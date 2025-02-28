@@ -24,7 +24,7 @@ def fetch_genbank(access, file_name, email, db='nucleotide',start_acc=None,write
             if start_acc:
                 for i, acc in enumerate(access[access.index(start_acc):]):
                     if i%5000 == 0 and i!=0:
-                        sleep(300)
+                        sleep(60)
                         with Entrez.efetch(db=db,id=acc, rettype='gb',retmode='text') as handle:
                             data=handle.read()
                             output.write(data)
@@ -35,7 +35,7 @@ def fetch_genbank(access, file_name, email, db='nucleotide',start_acc=None,write
             else:
                 for i, acc in enumerate(access):
                     if i%5000 == 0 and i!=0:
-                        sleep(300)
+                        sleep(60)
                         with Entrez.efetch(db=db,id=acc, rettype='gb',retmode='text') as handle:
                             data=handle.read()
                             output.write(data)
@@ -155,8 +155,15 @@ def check_missing(gb_file,accession_list):
         print('No missing records')
     else:
         return list(missing)
+def gb_to_fasta(input_file,output_file):
+    '''
+    Converts a gb file to fasta file (header+full sequence)
 
-def gb_to_fasta(input_file, output_file, feature_type='CDS'):
+    '''
+    with open(output_file, "w") as fasta_file:
+        SeqIO.write(SeqIO.parse(input_file, "genbank"), fasta_file, "fasta")    
+
+def gb_feature_to_fasta(input_file, output_file, feature_type='CDS'):
     '''
     Converts a gb file into a fasta file
     param input_file(str): path for input gb file
@@ -214,7 +221,7 @@ def fetch_genbank_list(access, email, db='nucleotide'):
     try:
         for i, acc in enumerate(access):
             if i%5000 == 0 and i!=0:
-                sleep(300)
+                sleep(60)
                 with Entrez.efetch(db=db,id=acc, rettype='gb',retmode='text') as handle:
                     record=handle.read()
                     output.append(record)
@@ -271,3 +278,60 @@ def append_genbank_from_list(main_file, records, verbose=False):
         SeqIO.write(all_records, main_file,'genbank')
         if verbose:
             print(f'Appended {len(outfile)} new records to {main_file}')
+
+def fetch_fasta(access, file_name, email, db='nucleotide',start_acc=None,write_mode='a'):
+    '''
+    Fetches Fasta files from NCBI given a list of accession numbers and saves them into a file
+    Args:
+    access: list of accession numbers
+    file_name: str, name of the output file
+    db: str, database to fetch from (default is 'nucleotide')
+    email: str, Entrez email
+    Returns: list of failed files
+    '''
+    Entrez.email = email
+
+    failed=[]
+    try:
+        with open(file_name, write_mode) as output:
+            if start_acc:
+                for i, acc in enumerate(access[access.index(start_acc):]):
+                    if i%5000 == 0 and i!=0:
+                        sleep(60)
+                        with Entrez.efetch(db=db,id=acc, rettype='fasta',retmode='text') as handle:
+                            data=handle.read()
+                            output.write(data)
+                    else:
+                        with Entrez.efetch(db=db,id=acc, rettype='fasta',retmode='text') as handle:
+                            data=handle.read()
+                            output.write(data)    
+            else:
+                for i, acc in enumerate(access):
+                    if i%5000 == 0 and i!=0:
+                        sleep(60)
+                        with Entrez.efetch(db=db,id=acc, rettype='fasta',retmode='text') as handle:
+                            data=handle.read()
+                            output.write(data)
+                    else:
+                        with Entrez.efetch(db=db,id=acc, rettype='fasta',retmode='text') as handle:
+                            data=handle.read()
+                            output.write(data)
+    
+    except Exception as e:
+        print(f'Error fetching data for accession numbers: {access}, Error: {e}')
+        failed.append(access)
+    if failed != []:
+        print('Accessions that were not retrieved:')
+        for elem in failed:
+            print(elem)
+        return failed
+def filter_fasta_by_accession(infile,access,outfile):
+    outputs=[]
+    with open(infile,'r') as handle:
+        records=SeqIO.parse(handle,'fasta')
+        for record in records:
+            if record.id in access:
+                outputs.append(record)
+    with open(outfile,'w') as filtered:
+        for elem in outputs:
+            SeqIO.write(elem,filtered,'fasta')

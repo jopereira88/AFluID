@@ -519,30 +519,36 @@ def mine_segment(dict):
             for item in value:
                 if item.upper() in dict[access].upper():
                     mined[access]=key
-
-def mine_genotype(dict):
-    full_gen_patt = re.compile(r"H\d{1,2}N\d{1,2}", re.IGNORECASE)  # Full HxNx pattern
-    gen_patt_H = re.compile(r"H\d{1,2}", re.IGNORECASE)  # Hx only pattern
-    gen_patt_N = re.compile(r"N\d{1,2}", re.IGNORECASE)  # Nx only pattern
-    gen_dict={}
-    for key in dict:
-        ex = re.search(full_gen_patt, dict[key])
-        if ex is not None:
-            gen_dict[key] = ex.group()  # Full HxNx found
+def mine_genotype_H(list_of_genotypes):
+    gen_patt=r'(H\d{1,2})(N\d{1,2})'
+    part_h=r'H\d{1,2}'
+    part_genos={gen:set() for gen in list_of_genotypes}
+    for geno in list_of_genotypes:
+        match= re.match(gen_patt,geno)
+        if match:
+            part_genos[geno].add(match.group(1)) #HA
         else:
-        # Try finding H or N individually if full HxNx not found
-            ex1 = re.search(gen_patt_H, dict[key])
-            ex2 = re.search(gen_patt_N, dict[key])
-            if ex1 is not None and ex2 is not None:
-            # Only set if both H and N are found individually
-                gen_dict[key] = ex1.group() + ex2.group()
-            elif ex1 is not None:
-                gen_dict[key]= ex1.group()  # Only H found
-            elif ex2 is not None:
-                gen_dict[key]= ex2.group()  # Only N found
-            else:
-                gen_dict[key] = 'Unknown'
-    return gen_dict
+            lookup_H=re.match(part_h,geno)
+            if lookup_H:
+                part_genos[geno].add(lookup_H.group())
+    for key in part_genos:
+        part_genos[key]=list(part_genos[key])
+    return part_genos
+def mine_genotype_N(list_of_genotypes):
+    gen_patt=r'(H\d{1,2})(N\d{1,2})'
+    part_n=r'N\d{1,2}'
+    part_genos={gen:set() for gen in list_of_genotypes}
+    for geno in list_of_genotypes:
+        match= re.match(gen_patt,geno)
+        if match:
+            part_genos[geno].add(match.group(2)) #NA
+        else:
+            lookup_N=re.match(part_n,geno)
+            if lookup_N:
+                part_genos[geno].add(lookup_N.group())
+    for key in part_genos:
+        part_genos[key]=list(part_genos[key])
+    return part_genos
 
 def int_to_iupac(value):
     '''
@@ -555,6 +561,48 @@ def int_to_iupac(value):
         return iupac[int(value)]
     except KeyError:
         print(f"Invalid segment value: {value}, expected 1 to 8")
+
+def convert_to_prop(dict):
+    '''Converts a dictionary of counts into a dictionary of proportions
+    Accepts: dict(dict) - dictionary of counts
+    Returns: prop(dict) - dictionary of proportions'''
+    prop={}
+    total=sum(dict.values())
+    for key in dict:
+        prop[key]=dict[key]/total
+    return prop
+
+
+def get_ncbi_accessions(fasta_file):
+    """
+    Parses a multi-FASTA file and extracts NCBI accession numbers from headers.
+
+    Args:
+        fasta_file (str): Path to the FASTA file.
+
+    Returns:
+        set: A set of extracted NCBI accession numbers.
+    """
+    accessions = set()
+    
+    # NCBI accession number patterns
+    accession_patterns = [
+        r">([A-Z]{1,2}_\d+\.\d+)",  # RefSeq (e.g., "NM_001256789", "XP_123456")
+        r">([A-Z]+\d+\.\d+)",  # GenBank (e.g., "ABC123456.1", "XYZ9876543.2")
+        r">(\d+\.\d+)",        # Numeric-only (e.g., "123456.1")
+    ]
+    
+    with open(fasta_file, 'r') as f:
+        for line in f:
+            if line.startswith(">"):  # FASTA headers start with '>'
+                for pattern in accession_patterns:
+                    match = re.search(pattern, line)
+                    if match:
+                        accessions.add(match.group(1))
+                        break  # Stop after the first valid match
+    
+    return accessions
+
 
 
 

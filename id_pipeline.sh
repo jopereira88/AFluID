@@ -27,6 +27,7 @@ SAMPLE=$1
 OUTNAME=$(echo $SAMPLE | cut -d \. -f 1)
 RUN_DT=$(date +"%Y-%m-%d_%H-%M-%S")
 ID=0.99
+METADATA=flu_metadata_4.2_flt.csv
 CLUSTER_FASTA=infDNAClusters
 CLUSTER_REFS=cluster_desc.txt
 ENV_NAME=fluid
@@ -117,7 +118,7 @@ cd-hit-est-2d -i $CLUSTER_DB/$CLUSTER_FASTA -i2 $SAMPLES_DIR/"format_$SAMPLE" -o
  2>>$LOGS_DIR/"$SAMPLE-$RUN_DT.stderr"
 
 #RETURNS ASSIGNMENTS FROM CD-HIT
-python3 clusterAssign.py $RUN_DIR/"format_$OUTNAME.clstr" 
+python3 clusterAssign.py $RUN_DIR/"format_$OUTNAME.clstr" $SAMPLES_DIR/"format_$SAMPLE"
 
 
 #GENERATES $SAMPLE_clust.txt report with: sample; ID; Assign_Cluster; Cluster_rep; genotype; segment; host
@@ -133,13 +134,13 @@ then
     python3 blastCluster.py to_blast.fasta 
     if [ -s "$SAMPLES_DIR/to_reblast.fasta" ]
     then 
-        python3 bestBlast2.py to_reblast.fasta  
+        python3 bestBlast2.py to_reblast.fasta $METADATA 
     fi
 
 fi
 
 #CONFORMING DATA IN FINAL REPORT ID REPORT
-python3 reportGenerator.py to_blast_bclust_report.txt to_reblast_report.txt 
+python3 reportGenerator.py to_blast_bclust_report.txt to_reblast_report.txt $OUTNAME 
 
 if $FLUMUT; 
 then

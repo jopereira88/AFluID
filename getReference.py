@@ -8,7 +8,7 @@ if __name__=='__main__':
     report_path=f'reports/{sys.argv[1]}'
     db_path=f'references/{sys.argv[2]}'
 
-update_local_db=False
+update_local_db=True
 
 #opening report path and fetching references
 report=pd.read_table(report_path,index_col=False)

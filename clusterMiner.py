@@ -43,7 +43,7 @@ for key in clust_rep.data:
     elif clust_rep.data[key][4] =='6':
         if len(ns[key]) > 1:
             to_blast.append(key)
-print(to_blast)
+#print(to_blast)
 #Writing report dict
 to_report={}
 for key in clust_rep.data:

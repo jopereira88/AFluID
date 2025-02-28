@@ -6,7 +6,7 @@ import sys
 #start_time=time.time()
 
 #Paths
-metadata_path='metadata/flu_metadata_4.1_flt.csv'
+metadata_path='metadata/'
 data_path='samples/'
 db_path='blast_db/sequencesDnaInf'
 run_path='runs/'
@@ -14,6 +14,7 @@ output_path='reports/'
 
 if __name__ == '__main__':
     fasta_file=sys.argv[1]
+    metadata_file=f'{metadata_path}{sys.argv[2]}'
 
 #fasta_file='to_reblast.fasta' #for direct script access
 
@@ -34,7 +35,7 @@ with open(f'{run_path}{fasta_file.split(".")[0]}_run.txt') as tabular:
 #Opening metadata and compiling the report dictionary
 #Structure: Sample ID,%identity, bb_access,  bb_org_name, genotype, segment, host
 
-metadata=SequenceMetadata(metadata_path)
+metadata=SequenceMetadata(metadata_file)
 report={}
 for i in queries:
         report[i]={}

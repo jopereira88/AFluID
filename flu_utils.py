@@ -534,6 +534,20 @@ def mine_genotype_H(list_of_genotypes):
     for key in part_genos:
         part_genos[key]=list(part_genos[key])
     return part_genos
+def mine_single_HA(str):
+    part_h=r'H\d{1,2}'
+    lookup_H=re.match(part_h,str)
+    if lookup_H:
+        return lookup_H.group()
+    else:
+        return 'UD'
+def mine_single_NA(str):
+    part_n=r'N\d{1,2}'
+    lookup_N=re.match(part_n,str)
+    if lookup_N:
+        return lookup_N.group()
+    else:
+        return 'UD'
 def mine_genotype_N(list_of_genotypes):
     gen_patt=r'(H\d{1,2})(N\d{1,2})'
     part_n=r'N\d{1,2}'

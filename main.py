@@ -8,7 +8,7 @@ import subprocess
 import json
 import glob
 from flu_utils import seq_get,dict_to_fasta,headers_from_mult_fas,parse_clstr,pkl_load,\
-    seq_filter_get,mine_genotype_H,mine_genotype_N,convert_to_prop
+    seq_filter_get,mine_genotype_H,mine_genotype_N,convert_to_prop, mine_single_HA,mine_single_NA
 from metadata_utils import ClusterReportTable, ClusterMetadata, SequenceMetadata
 from structures import flagdict
 from copy import deepcopy
@@ -457,32 +457,25 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,samples_p:str,re
     for key in Seq_seg:
         if Seq_seg[key]==4:
             Seq_HA=key
+            Gen_HA=Seq_gen[Seq_HA]
+            if type(Gen_HA)==list:
+                for i in Gen_HA:
+                    HA=mine_single_HA(i)
+                    if HA != 'UD' and mode=='consensus':
+                        if HA in flags['Final Report']['Sequences for NextClade']:
+                            flags['Final Report']['Sequences for NextClade'][HA].append(remap[key])
+            elif type(Gen_HA)==str:
+                HA=mine_single_HA(Gen_HA)
+                if HA != 'UD' and mode=='consensus':
+                    if HA in flags['Final Report']['Sequences for NextClade']:
+                        flags['Final Report']['Sequences for NextClade'][HA].append(remap[key])
             flags['Sample']['HA'].append(remap[key])
             flags['Sample']['HA_ref'].append(Seq_ref[key])
-            Gen_HA=Seq_gen[Seq_HA] if Seq_HA!='' else 'NA'
-            Gen_HA_mine=mine_genotype_H(Gen_HA)
-            Hx=set()
-            for gen in Gen_HA_mine:
-                Hx.add(Gen_HA_mine[gen][0])
-                if len(Hx)==1:
-                    Gen_HA=list(Hx)[0]
-                    if single_sample:
-                        flags['Sample']['H_gen']=Gen_HA
-                    if mode == 'consensus':
-                        if Gen_HA in flags['Final Report']['Sequences for NextClade']:
-                            flags['Final Report']['Sequences for NextClade'][Gen_HA].append(remap[key])
         elif Seq_seg[key]==6:
             Seq_NA=key
+            Gen_NA=Seq_gen[Seq_NA]
             flags['Sample']['NA'].append(remap[key])
             flags['Sample']['NA_ref'].append(Seq_ref[key])
-            Gen_NA=Seq_gen[Seq_NA] if Seq_NA!='' else 'NA'
-            Gen_NA_mine=mine_genotype_N(Gen_NA)
-            Nx=set()
-            for gen in Gen_NA_mine:
-                if len(Gen_NA_mine[gen])>1:
-                    Nx.add(Gen_NA_mine[gen][1])
-                else:
-                    Nx.add(Gen_NA_mine[gen][0])
         elif Seq_seg[key]==1:
             flags['Sample']['PB2'].append(remap[key])
             flags['Sample']['PB2_ref'].append(Seq_ref[key])
@@ -506,19 +499,25 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,samples_p:str,re
     #Mining genotypes
     Hx=set()
     Nx=set()
-    if 4 in Seq_seg.values():
-        Gen_HA=Seq_gen[Seq_HA]
-        Gen_HA_mine=mine_genotype_H(Gen_HA)
-        for key in Gen_HA_mine:
-            Hx.add(Gen_HA_mine[key][0])
-    if 6 in Seq_seg.values():
-        Gen_NA=Seq_gen[Seq_NA]
-        Gen_NA_mine=mine_genotype_N(Gen_NA)
-        for key in Gen_NA_mine:
-            if len(Gen_NA_mine[key])>1:
-                Nx.add(Gen_NA_mine[key][1])
-            else:
-                Nx.add(Gen_NA_mine[key][0])    
+    if single_sample:
+        if 4 in Seq_seg.values():
+            Gen_HA_mine=mine_genotype_H(Gen_HA)
+            for key in Gen_HA_mine:
+                try:
+                    Hx.add(Gen_HA_mine[key][0])
+                except IndexError:
+                    continue
+        if 6 in Seq_seg.values():
+            Gen_NA_mine=mine_genotype_N(Gen_NA)
+            for key in Gen_NA_mine:
+                try:
+                    if len(Gen_NA_mine[key])>1:
+                        Nx.add(Gen_NA_mine[key][1])
+                    else:
+                        Nx.add(Gen_NA_mine[key][0])
+                except IndexError:
+                    continue
+           
     if len(Hx)==1:
         Gen_HA=list(Hx)[0]
         flags['Sample']['H_gen']=Gen_HA
@@ -536,12 +535,10 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,samples_p:str,re
         if single_sample==False:
             force_flumut==True
             force_genin==True    
-        if Gen_HA=='H5' or force_flumut:
+        if flags['Sample']['H_gen']=='H5' or force_flumut:
             for i in Seq_names:
                 flags['Final Report']['Sequences for FluMut'].append(remap[i])
-        if Gen_HA in flags['Final Report']['Sequences for NextClade'] and single_sample:
-            flags['Final Report']['Sequences for NextClade'][Gen_HA].extend(flags['Sample']['HA'])
-        if Gen_HA=='H5' or force_genin:
+        if flags['Sample']['H_gen']=='H5' or force_genin:
             for i in Seq_names:
                 flags['Final Report']['Sequences for GenIn'].append(remap[i])
 
@@ -681,7 +678,7 @@ def fasta_to_nextclade(flagsdict, samples_p, filename):
             outdict = {}
             for sample in seqs:
                 outdict[sample]=flt_fasta[sample]
-            dict_to_fasta(outdict, os.path.join(samples_p, f'{filename}_to_nextclade_{key}'))
+            dict_to_fasta(outdict, os.path.join(samples_p, f'{filename.replace(".fasta","")}_to_nextclade_{key}'))
 def run_nextclade(fasta,flagsdict,reports_p,samples_p,filename):
     dict_builds_broad={'H1':'flu_h1n1pdm_ha_broad','H3':'flu_h3n2_ha_broad','H5':'community/moncla-lab/iav-h5/ha/all-clades'}
     for key in flagsdict['Final Report']['Sequences for NextClade']:
@@ -707,8 +704,11 @@ def parser():
     parser.add_argument('-m','--mode',type=str,help='Mode of operation', choices=('contig','consensus'), required=True)
     parser.add_argument('-ff','--force',help='Force run of aditional tools',nargs='*',choices=('flumut','genin','getref'))
     parser.add_argument('-fdb','--update_flumut_db',type=str,help='turn off auto-update for flumut db', choices=('on','off'), default='on',required=False)
-    parser.add_argument('-ss','--single_sample',type=bool,help='Single sample mode',default=True,choices=(True,False),required=False)
+    parser.add_argument('-ss','--single_sample',type=str,help='Single sample mode',default='on',choices=('on','off'),required=False)
     parser.add_argument('-off','--turn_off',help='Turn Off additional analysis tools',nargs='*',choices=('flumut','genin','nextclade','getref'))
+    parser.add_argument('-rm','--remove_previous',type=bool,help='Remove previous files',default=True,choices=(True,False),required=False)
+    parser.add_argument('-Ml','--max_length',type=int,help='Maximum sequence length',required=False)
+    parser.add_argument('-ml','--min_length',type=int,help='Minimum sequence length',required=False)
     args=parser.parse_args()
     return args
 
@@ -723,7 +723,10 @@ def main(flagdict=flagdict):
     mode=args.mode
     update_flumut=args.update_flumut_db
     off_apps=args.turn_off
-    single=args.single_sample if args.mode=='consensus' else False
+    if args.single_sample.lower()=='on':
+        single=True
+    else:
+        single=False
     if not single:
         flags['Master']['single']=False
     #### LOAD CONFIG PARAMETERS
@@ -754,7 +757,8 @@ def main(flagdict=flagdict):
     blasts=config['Paths']['blast_database']
     clusters=config['Paths']['cluster_database']
     metadata=config['Paths']['metadata']
-    rm_previous=config['Functions']['remove_previous']
+    rm_previous=config['Functions']['remove_previous'] if\
+          args.remove_previous else False
     cwd=os.getcwd()
     samples_p=os.path.join(cwd,samples)
     runs_p=os.path.join(cwd,runs)
@@ -764,7 +768,10 @@ def main(flagdict=flagdict):
     blasts_p=os.path.join(cwd,blasts)
     clusters_p=os.path.join(cwd,clusters)
     metadata_p=os.path.join(cwd,metadata)
-
+    print('Single sample mode:',single)
+    print('Remove previous files:',rm_previous)
+    print('Configuration file:',config_file)
+    print('Sample File:',filename)
     #### CHECK PATHS
     if os.path.exists(samples_p):
         if os.path.exists(runs_p):
@@ -813,7 +820,9 @@ def main(flagdict=flagdict):
     dict_cluster=pkl_load(os.path.join(clusters_p,config["Filenames"]["cluster_pkl"]))
     
     ###PIPELINE STEPS
-    mappings=fasta_preprocess(filename,samples_p,int(config["Sequence_Size"]["min"]),int(config["Sequence_Size"]["max"]),flags,verbose=True)
+    max=int(config["Sequence_Size"]["max"]) if not args.max_length else args.max_length
+    min=int(config["Sequence_Size"]["min"]) if not args.min_length else args.min_length
+    mappings=fasta_preprocess(filename,samples_p,min,max,flags,verbose=True)
     file=filename.replace('.fasta','')
     cd_hit_est_2d(os.path.join(samples_p,f'format_{filename}'),os.path.join(clusters_p,config["Filenames"]["cluster"]),os.path.join(runs_p,f'format_{file}'),float(config["CD-HIT"]["identity"]),logs_p,verbose=True)
     
@@ -839,31 +848,33 @@ def main(flagdict=flagdict):
             flags['Master']['genin']=True
         if 'getref' in args.force:  
             flags['Master']['getref']=True
-    redirector(f"{filename.replace('.fasta','')}_ID_Report.txt",flags,filename,mappings,samples_p,reports_p,force_flumut=flags['Master']['flumut'],force_genin=flags['Master']['genin'],force_getref=flags['Master']['getref'],mode=mode,single_sample=single)
-    list_ref=flags['Final Report']['Get References']
+    redirector(f"{file}_ID_Report.txt",flags,filename,mappings,samples_p,reports_p,force_flumut=flags['Master']['flumut'],force_genin=flags['Master']['genin'],force_getref=flags['Master']['getref'],mode=mode,single_sample=single)
     #flumut:
     if flags['Master']['flumut']:
         conform_to_flumut(flags,samples_p,filename)
         if update_flumut.upper()=='ON':
             update_flumut_db()
-        run_flumut(reports_p,samples_p,filename.replace('.fasta',''))
-        remap_flumut_report(reports_p,mappings,filename.replace('.fasta',''))
+        run_flumut(reports_p,samples_p,file)
+        remap_flumut_report(reports_p,mappings,file)
     #NextClade
     if flags['Master']['nextclade']:
         
         fasta_to_nextclade(flags,samples_p,filename)
-        run_nextclade(f'{filename}_to_nextclade',flags,reports_p,samples_p,filename.replace('.fasta',''))
+        run_nextclade(f'{file}_to_nextclade',flags,reports_p,samples_p,file)
         if flags['Final Report']['Sequences for NextClade']['H1']!=[]:
-            remap_nextclade(reports_p,f"{filename.replace('.fasta','')}_H1_nextclade.tsv",mappings)
-            if flags['Final Report']['Sequences for NextClade']['H3']!=[]:
-                remap_nextclade(reports_p,f"{filename.replace('.fasta','')}_H3_nextclade.tsv",mappings)
-                if flags['Final Report']['Sequences for NextClade']['H5']!=[]:
-                    remap_nextclade(reports_p,f"{filename.replace('.fasta','')}_H5_nextclade.tsv",mappings)
+            remap_nextclade(reports_p,f"{file}_H1_nextclade.tsv",mappings)
+        if flags['Final Report']['Sequences for NextClade']['H3']!=[]:
+            remap_nextclade(reports_p,f"{file}_H3_nextclade.tsv",mappings)
+        if flags['Final Report']['Sequences for NextClade']['H5']!=[]:
+            remap_nextclade(reports_p,f"{file}_H5_nextclade.tsv",mappings)
     
     #get reference:
     if flags['Master']['getref']:
-        get_reference(flags['Final Report']['Get References'],references_p,config['Filenames']['ref_db'],filename,email='jlgp1988@gmail.com',update_local_db=True)
+        get_reference(flags['Final Report']['Get References'],references_p,config['Filenames']['ref_db'],filename,email=config['getref']['email'],update_local_db=True)
     
+    #getting flagsdict into json
+    with open(f'{os.path.join(reports_p,file)}_flags.json','w') as f:
+        json.dump(flags,f)
 
 if __name__=='__main__':
     main()

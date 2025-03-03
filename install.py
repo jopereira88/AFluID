@@ -6,9 +6,9 @@ from flu_utils import metadata_dict,parse_clstr
 from collections import Counter
 import pickle
 
-def cluster_charact(metadata,metadata_p,cluster_table,cluster_p,cluster_pkl_name,cluster_meta_name):
+def cluster_charact(metadata,metadata_p,clstr,cluster_p,cluster_pkl_name,cluster_meta_name):
     meta=metadata_dict(os.path.join(metadata_p,metadata),[9,10,12])
-    clusters=parse_clstr(os.path.join(cluster_p,cluster_table))
+    clusters=parse_clstr(os.path.join(cluster_p,clstr))
     #getting metadata annotations per cluster
     cluster_table={}
     for key in clusters:
@@ -22,7 +22,7 @@ def cluster_charact(metadata,metadata_p,cluster_table,cluster_p,cluster_pkl_name
         cluster_table[elem][1]=dict(cluster_table[elem][1])
         cluster_table[elem][2]=dict(cluster_table[elem][2])
     #getting cluster representatives
-    clusters=parse_clstr(os.path.join(cluster_p,cluster_table),access_only=False)
+    clusters=parse_clstr(os.path.join(cluster_p,clstr),access_only=False)
     cluster_reps={}
     for cl in clusters:
         rep=[item for item in clusters[cl] if '*' in item]
@@ -38,16 +38,16 @@ def cluster_charact(metadata,metadata_p,cluster_table,cluster_p,cluster_pkl_name
             file.write(f'{elem}\t{cluster_table[elem][3]}\t{cluster_table[elem][0]}\t{cluster_table[elem][1]}\t{cluster_table[elem][2]}\n')
 
 if __name__ == '__main__':
-    config=sys.argv[1]
+    config_file=sys.argv[1]
 
     #check if config is available
-    if not os.path.exists(config):
-        print(f'Error: {config} not found.')
+    if not os.path.exists(config_file):
+        print(f'Error: {config_file} not found.')
         sys.exit(1)
 
     #read config file
     config = configparser.ConfigParser()
-    config.read(config)
+    config.read(config_file)
     cwd=os.getcwd()
     #check if required paths exist
     for path in ['samples', 'runs', 'references', 'reports', 'logs', 'blast_database', 'cluster_database', 'metadata']:
@@ -72,20 +72,22 @@ if __name__ == '__main__':
     print('Files moved successfully.')
     print('Creating blast database...')
     #create blast database
-    os.system(f'makeblastdb -in {config['Filenames']['l-blast']}.fasta\
-               -dbtype nucl -out {os.path.join(config["Paths"]["blast_database"],\
-                                               config["Filenames"]["l-blast"])}')
+    if not os.path.exists(os.path.join(config["Paths"]["blast_database"],f'{config["Filenames"]["l_blast"]}.ndb')):
+        os.system(f'makeblastdb -in {config["Filenames"]["l_blast"]}.fasta\
+            -dbtype nucl -out {os.path.join(config["Paths"]["blast_database"],config["Filenames"]["l_blast"])}')
     #creating cluster database
     print('Creating cluster database...')
-    os.system(f'cd-hit-est -i {config['Filenames']['l-blast']}.fasta\
-               -o {os.path.join(config["Paths"]['cluster_database'],config["Filenames"]['cluster'])}\
-                  -c {config['CD-HIT']['identity']} -M {config['CD-HIT']['memory']}')
+    if not os.path.exists(os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster_clstr"])):    
+        os.system(f'cd-hit-est -i {config["Filenames"]["l_blast"]}.fasta\
+               -o {os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster"])}\
+                  -c {config["CD-HIT"]["identity"]} -M {config["CD-HIT"]["memory"]}')
     #creating cluster metadata file
     print('Creating cluster metadata...')
-    cluster_charact(metadata,config['Paths']['metadata'],config['Filenames']['cluster_clstr'],\
-                    config['Paths']['cluster_database'],config['Filenames']['cluster_pkl'].replace('.pkl',''),config['Filenames']['cluster_metadata'])
+    if not os.path.exists(os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster_metadata"])):
+        cluster_charact(metadata,config['Paths']['metadata'],config['Filenames']['cluster_clstr'],\
+            config['Paths']['cluster_database'],config['Filenames']['cluster_pkl'].replace('.pkl',''),config['Filenames']['cluster_metadata'])
     #creating representative blast database
     print('Creating representative blast database...')
-    os.system(f'makeblastdb -in {config['Filenames']['cluster']}\
-              -dbtype nucl -out {os.path.join(config["Paths"]["blast_database"],\
-                                              config["Filenames"]["cluster"])}')
+    if not os.path.exists(os.path.join(config["Paths"]["blast_database"], config["Filenames"]["cluster"])):    
+        os.system(f'makeblastdb -in {os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster"])}\
+              -dbtype nucl -out {os.path.join(config["Paths"]["blast_database"], config["Filenames"]["cluster"])}')

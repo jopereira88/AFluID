@@ -706,7 +706,7 @@ def parser():
     parser.add_argument('-fdb','--update_flumut_db',type=str,help='turn off auto-update for flumut db', choices=('on','off'), default='on',required=False)
     parser.add_argument('-ss','--single_sample',type=str,help='Single sample mode',default='on',choices=('on','off'),required=False)
     parser.add_argument('-off','--turn_off',help='Turn Off additional analysis tools',nargs='*',choices=('flumut','genin','nextclade','getref'))
-    parser.add_argument('-rm','--remove_previous',type=bool,help='Remove previous files',default=True,choices=(True,False),required=False)
+    parser.add_argument('-rm','--remove_previous',type=str,help='Remove previous files',default='on',choices=('on','off'),required=False)
     parser.add_argument('-Ml','--max_length',type=int,help='Maximum sequence length',required=False)
     parser.add_argument('-ml','--min_length',type=int,help='Minimum sequence length',required=False)
     args=parser.parse_args()
@@ -758,7 +758,7 @@ def main(flagdict=flagdict):
     clusters=config['Paths']['cluster_database']
     metadata=config['Paths']['metadata']
     rm_previous=config['Functions']['remove_previous'] if\
-          args.remove_previous else False
+          args.remove_previous.lower()=='on' else False
     cwd=os.getcwd()
     samples_p=os.path.join(cwd,samples)
     runs_p=os.path.join(cwd,runs)

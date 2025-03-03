@@ -63,5 +63,10 @@ To run the pipeline place the sample fasta files in the ```samples/``` directory
 
 You can find intermediate output files in the ```runs/``` directory, logs in the ```logs/``` directory and the intermediate and final reports in the ```reports/``` directory.
 
+Sample usage (one sample, deafault config file, single sample mode, no forces, no offs, consensus mode):
+´´´
+python3 main.py -f  SAMPLE_FASTA.fasta -m consensus
+´´´
+
 ## Pipeline steps
 

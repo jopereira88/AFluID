@@ -335,3 +335,16 @@ def filter_fasta_by_accession(infile,access,outfile):
     with open(outfile,'w') as filtered:
         for elem in outputs:
             SeqIO.write(elem,filtered,'fasta')
+
+def remove_records(fasta_file,accessions,output_file):
+    '''
+    Removes records from a fasta file given a list of accessions
+    '''
+    records=[]
+    with open(fasta_file,'r') as handle:
+        for record in SeqIO.parse(handle,'fasta'):
+            if record.id not in accessions:
+                records.append(record)
+    with open(output_file,'w') as output:
+        for record in records:
+            SeqIO.write(record,output,'fasta')

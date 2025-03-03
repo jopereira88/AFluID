@@ -6,8 +6,7 @@ Pipeline for Influenza A virus segment and genotype identification though homolg
 ### Requirements
 1. Anaconda or Miniconda installed and wsl or unix/linux command line
 2. A fasta file with several fully assembled sequences of multiple influenza segments: I got the dataset I used from NCBI virus database.
-3. A metadata .csv file describing each acession in **at a minimum** segment, genotype and host. I have a manually curated version in this repository (ver. 4) that has the header fields necessary for the python indexing to work
-4. A genbank .gb file that can be empty (just use the command ```touch YOUR_GB_REF_FILE.gb```)
+3. A metadata .csv file describing each acession in **at a minimum** segment, genotype and host. I have a manually curated version in this repository (ver. 4) that has the header fields necessary for the python indexing to work. The dataset used for this work is available [here](https://zenodo.org/records/14963247).
 
 ### Procedure
 1. Begin by cloning this repository using the command:

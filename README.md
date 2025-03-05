@@ -85,4 +85,4 @@ This pipeline comprises several steps:
 7. The pipeline will then parse the report and redirect every sequence to the posterior analysis (flumut, genin, nextclade or get_references)
 
 The following diagram illustrates the pipeline workflow:
-[Pipeline workflow](Diagrama_pipeline.drawio.png)
+[Pipeline workflow (light)](Diagrama_pipeline.drawio.png) or [Pipeline workflow (dark)](Diagrama_pipeline.drawio.dark.png)

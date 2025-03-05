@@ -62,10 +62,27 @@ To run the pipeline place the sample fasta files in the ```samples/``` directory
 
 You can find intermediate output files in the ```runs/``` directory, logs in the ```logs/``` directory and the intermediate and final reports in the ```reports/``` directory.
 
-Sample usage (one sample, deafault config file, single sample mode, no forces, no offs, consensus mode):
-´´´
+Sample usage (one sample, default config file, single sample mode, no forces, no offs, consensus mode):
+
+```
 python3 main.py -f  SAMPLE_FASTA.fasta -m consensus
-´´´
+```
 
 ## Pipeline steps
+This pipeline comprises several steps:
+1. The pipeline preprocesses the fasta file in order to remove large headers and metacharacters. Will create a mapping dictionary to map the conformed headers against the original ones. This step will also filter sequences below and above preconfigured length thresholds. Every discarded sequence will be stored in the flags dictionary.
 
+2. The sequences will be subjected to CD-HIT clustering
+
+3. The CD-HIT outputs are parsed and a cluster report is outputted.
+
+4. The unassigned sequences will be subjected to a BLAST step against cluster representatives.
+
+5. Every unassigned samples for this step will be subjected to a BLAST step against the bulk local database.
+
+6. The stored data form the previous reports will then be compiled into the final ID report.
+
+7. The pipeline will then parse the report and redirect every sequence to the posterior analysis (flumut, genin, nextclade or get_references)
+
+The following diagram illustrates the pipeline workflow:
+[Pipeline workflow](Diagrama_pipeline.drawio.png)

@@ -30,7 +30,7 @@ def seq_enum(counter: int) -> str:
     """
     return f'>Seq_{counter}'
 
-def fasta_preprocess(filename: str,samples_path: str, min_seq_len: int, max_seq_len: int, flags:dict, verbose: bool=False) -> None:
+def fasta_preprocess(filename: str,samples_path: str,runs_path:str, min_seq_len: int, max_seq_len: int, flags:dict, verbose: bool=False) -> None:
     """
     Preprocess a FASTA file by removing sequences outside of a length range and saving the processed sequences and header mappings.
 
@@ -80,7 +80,7 @@ def fasta_preprocess(filename: str,samples_path: str, min_seq_len: int, max_seq_
     outname=filename.split('/')[-1]
     outname=outname.replace('.fasta','')
     outname_fasta='format_'+outname
-    dict_to_fasta(mappings, os.path.join(samples_path,outname_fasta))
+    dict_to_fasta(mappings, os.path.join(runs_path,outname_fasta))
     return header_mapping
 
 #### CD-HIT
@@ -207,7 +207,7 @@ def cluster_compile(s_dict:str, cl_dict:dict, cl_assign:str, reports_path:str) -
             continue
     output_name=cl_assign.split('/')[-1]
     output_name=output_name.replace('.assign','')
-    outpath=os.path.join(reports_path,f'{output_name}_clust_report.txt')
+    outpath=os.path.join(reports_path,f'{output_name.replace('format_','')}_clust_report.txt')
     
     #outputting report
     with open(f'{outpath}','w') as report:
@@ -223,7 +223,7 @@ def cluster_compile(s_dict:str, cl_dict:dict, cl_assign:str, reports_path:str) -
                 report.write(f'{sample}\t{compiler[sample][0]}\t{compiler[sample][1]}\n')
     print(f"Compiled report generated in {outpath}")
 
-def cluster_miner(reports_p:str,filename:str,samples_p:str,flags:dict) -> dict:
+def cluster_miner(reports_p:str,filename:str,samples_p:str,runs_p:str,flags:dict) -> dict:
     '''
     Mine cluster report for unassingned samples and 
     outputs them to BLAST
@@ -237,7 +237,7 @@ def cluster_miner(reports_p:str,filename:str,samples_p:str,flags:dict) -> dict:
     Outputs a .fasta file for blast analysis.
     '''
     #mining the cluster report for unassigned samples
-    clust_rep=ClusterReportTable(os.path.join(reports_p,f'format_{filename}_clust_report.txt'))
+    clust_rep=ClusterReportTable(os.path.join(reports_p,f'{filename}_clust_report.txt'))
     clust_rep.convert_to_prop('genotypes')
     clust_rep.convert_to_prop('hosts')
     hs=clust_rep.extract_h()
@@ -274,7 +274,7 @@ def cluster_miner(reports_p:str,filename:str,samples_p:str,flags:dict) -> dict:
         for i in to_blast:
             flags['CD-HIT']['Unclustered Sequences'].append(i)
         to_blast_dict=seq_filter_get(os.path.join(samples_p,f'format_{filename}.fasta'),to_blast)
-        dict_to_fasta(to_blast_dict,os.path.join(samples_p,f'{filename}_to_blast'))
+        dict_to_fasta(to_blast_dict,os.path.join(runs_p,f'{filename}_to_blast'))
         flags['Master']['C_BLAST']=True
     else:
         flags['Master']['C_BLAST']=False
@@ -337,7 +337,7 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
         for i in to_reblast:
             flags['BLAST']['Sequences unassigned against cluster representatives'].append(i)
         to_reblast_dict=seq_filter_get(os.path.join(samples_p,fasta),to_reblast)
-        dict_to_fasta(to_reblast_dict,os.path.join(samples_p,f'{filename.replace(".fasta","")}_to_reblast'))
+        dict_to_fasta(to_reblast_dict,os.path.join(runs_p,f'{filename.replace(".fasta","")}_to_reblast'))
         flags['Master']['L_BLAST']=True
     else:
         flags['Master']['L_BLAST']=False
@@ -822,22 +822,22 @@ def main(flagdict=flagdict):
     ###PIPELINE STEPS
     max=int(config["Sequence_Size"]["max"]) if not args.max_length else args.max_length
     min=int(config["Sequence_Size"]["min"]) if not args.min_length else args.min_length
-    mappings=fasta_preprocess(filename,samples_p,min,max,flags,verbose=True)
+    mappings=fasta_preprocess(filename,samples_p,runs_p,min,max,flags,verbose=True)
     file=filename.replace('.fasta','')
-    cd_hit_est_2d(os.path.join(samples_p,f'format_{filename}'),os.path.join(clusters_p,config["Filenames"]["cluster"]),os.path.join(runs_p,f'format_{file}'),float(config["CD-HIT"]["identity"]),logs_p,verbose=True)
+    cd_hit_est_2d(os.path.join(runs_p,f'format_{filename}'),os.path.join(clusters_p,config["Filenames"]["cluster"]),os.path.join(runs_p,f'format_{file}'),float(config["CD-HIT"]["identity"]),logs_p,verbose=True)
     
-    assignments=cluster_assign(f'format_{file}.clstr',os.path.join(samples_p,f'format_{filename}'),runs_p)
+    assignments=cluster_assign(f'format_{file}.clstr',os.path.join(runs_p,f'format_{filename}'),runs_p)
     cluster_compile(assignments,dict_cluster,os.path.join(runs_p,f'format_{file}.assign'),reports_p)
-    cluster_report=cluster_miner(reports_p,file,samples_p,flags)
+    cluster_report=cluster_miner(reports_p,file,runs_p,runs_p,flags)
     if flags['Master']['C_BLAST']:
-        blast_cluster=bclust(clusters_p,config["Filenames"]["cluster_metadata"],samples_p,blasts_p,config["Filenames"]["cluster"],runs_p,filename,flags,fasta=f"{filename.replace('.fasta','')}_to_blast.fasta")
+        blast_cluster=bclust(clusters_p,config["Filenames"]["cluster_metadata"],runs_p,blasts_p,config["Filenames"]["cluster"],runs_p,filename,flags,fasta=f"{filename.replace('.fasta','')}_to_blast.fasta")
         if flags['Master']['L_BLAST']:
-            blast_report=reblast(metadata_p,config["Filenames"]["metadata"],samples_p,blasts_p,config["Filenames"]["l_blast"],runs_p,filename,fasta=f"{filename.replace('.fasta','')}_to_reblast.fasta")
-            report_compiler(cluster_report,samples_p,filename,mappings,reports_p,flags,bclust_dict=blast_cluster,blast_dict=blast_report)
+            blast_report=reblast(metadata_p,config["Filenames"]["metadata"],runs_p,blasts_p,config["Filenames"]["l_blast"],runs_p,filename,fasta=f"{filename.replace('.fasta','')}_to_reblast.fasta")
+            report_compiler(cluster_report,runs_p,filename,mappings,reports_p,flags,bclust_dict=blast_cluster,blast_dict=blast_report)
         else:
-            report_compiler(cluster_report,samples_p,filename,mappings,reports_p,flags,bclust_dict=blast_cluster)
+            report_compiler(cluster_report,runs_p,filename,mappings,reports_p,flags,bclust_dict=blast_cluster)
     else:
-        report_compiler(cluster_report,samples_p,filename,mappings,reports_p,flags)
+        report_compiler(cluster_report,runs_p,filename,mappings,reports_p,flags)
     #FORCING ANALYSIS
     
     if args.force:
@@ -851,16 +851,16 @@ def main(flagdict=flagdict):
     redirector(f"{file}_ID_Report.txt",flags,filename,mappings,samples_p,reports_p,force_flumut=flags['Master']['flumut'],force_genin=flags['Master']['genin'],force_getref=flags['Master']['getref'],mode=mode,single_sample=single)
     #flumut:
     if flags['Master']['flumut']:
-        conform_to_flumut(flags,samples_p,filename)
+        conform_to_flumut(flags,runs_p,filename)
         if update_flumut.upper()=='ON':
             update_flumut_db()
-        run_flumut(reports_p,samples_p,file)
+        run_flumut(reports_p,runs_p,file)
         remap_flumut_report(reports_p,mappings,file)
     #NextClade
     if flags['Master']['nextclade']:
         
-        fasta_to_nextclade(flags,samples_p,filename)
-        run_nextclade(f'{file}_to_nextclade',flags,reports_p,samples_p,file)
+        fasta_to_nextclade(flags,runs_p,filename)
+        run_nextclade(f'{file}_to_nextclade',flags,reports_p,runs_p,file)
         if flags['Final Report']['Sequences for NextClade']['H1']!=[]:
             remap_nextclade(reports_p,f"{file}_H1_nextclade.tsv",mappings)
         if flags['Final Report']['Sequences for NextClade']['H3']!=[]:

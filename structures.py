@@ -10,5 +10,6 @@ flagdict={"Fasta Preprocess":{"Rejected Sequences":[]},"Master":{"C_BLAST":True,
                     'PB2_ref':[],'PB1_ref':[], 'PA_ref':[], 'NP_ref':[],'MP_ref':[],'NS_ref':[],'PB2_len':0,'PB1_len':0,
                     'PA_len':0,'HA_len':0,'NP_len':0,'MP_len':0,'NA_len':0,'NS_len':0,'H_gen':'','N_gen':''},
           "Final Report":{"Sequences for FluMut":[],"Sequences for NextClade":{'H1':[],'H3':[],'H5':[]},"Sequences for GenIn":[],'Get References':[]}}
+iupac_nucleotides={'A':'A','C':'C','G':'G','T':'T','R':'AG','Y':'CT','S':'GC','W':'AT','K':'GT','M':'AC','B':'CGT','D':'AGT','H':'ACT','V':'ACG','N':'ACGT'}
 taxa_dict={}
 geo_dict={}

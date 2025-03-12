@@ -27,7 +27,7 @@ I recommend you use the cwd as a path for now and the names of metadata and outp
   * Should you have all the sequences you need the script will output a file with all the fasta sequences that you have that are on the metadata file
   * If your sequence FASTA file is incomplete, the script will output a .txt file with the missing sequences' accession numbers for you to download and concatenate to your main file
 
-5. If you haven't done so yet you should open the config.ini file in a notepad program (notepad, notepad++, sublime text...) or nano to change any settings you deem necessary for your analysis.
+5. If you haven't done so yet, open the config.ini file in a notepad program (notepad, notepad++, sublime text...) or nano to change any settings you deem necessary for your analysis. **You also need to specify your email and conda environment path**.
 
 6. Run the installation script using the command:
 ```
@@ -58,11 +58,11 @@ The pipeline also runs 2 different modes and its behaviour can be altered by sev
 * Remove previous (*argument: -rm/--remove_previous (on/off) - default:on*):
     The pipline profuces intermediate outputs on the ```runs/``` and ```samples/``` paths. this will clear those files in the beginning of each run. If you are running batch or parallell analysis, turn off this feature.
 
-To run the pipeline place the sample fasta files in the ```samples/``` directory and run these commands:
+To run the pipeline **place the sample fasta files in the ```samples/``` folder**. You only need to specify the name of the file to be analysed as the pipeline will automatically search for the sample files in the ```samples/``` folder
 
 You can find intermediate output files in the ```runs/``` directory, logs in the ```logs/``` directory and the intermediate and final reports in the ```reports/``` directory.
 
-Sample usage (one sample, default config file, single sample mode, no forces, no offs, consensus mode):
+Sample usage (one sample per file, default config file, single sample mode, no forces, no offs, consensus mode):
 
 ```
 python3 main.py -f  SAMPLE_FASTA.fasta -m consensus

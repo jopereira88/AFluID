@@ -207,7 +207,7 @@ def cluster_compile(s_dict:str, cl_dict:dict, cl_assign:str, reports_path:str) -
             continue
     output_name=cl_assign.split('/')[-1]
     output_name=output_name.replace('.assign','')
-    outpath=os.path.join(reports_path,f'{output_name.replace('format_','')}_clust_report.txt')
+    outpath=os.path.join(reports_path,f'{output_name.replace("format_","")}_clust_report.txt')
     
     #outputting report
     with open(f'{outpath}','w') as report:
@@ -303,7 +303,7 @@ def best_blast(runs_p:str,blast_report:str,thres_id:float=0.0) -> dict:
         out_dict[row.qseqid]=[row.sseqid,row.pident]
     return out_dict
 
-def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,filename:str,flags:dict,fasta:str='to_blast.fasta') -> dict:
+def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,filename:str,flags:dict,num_threads:int=2,max_tar_seq:int=7,fasta:str='to_blast.fasta') -> dict:
     '''
     Run BLAST analysis on unassigned samples.
     Parameters:
@@ -312,13 +312,15 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
     blast_p (str): The path to the BLAST database directory.
     runs_p (str): The path to the runs directory.
     filename (str): The name of the sample file.
+    num_threads (int): The number of threads to use for BLAST analysis.
+    max_tar_seq (int): The maximum number of target sequences to return.
     fasta (str): The name of the FASTA file to be analyzed
     Outputs a .fasta file for BLAST analysis.
     '''
     access=headers_from_mult_fas([os.path.join(samples_p,fasta)],only_name=True)
     queries=[key for key in access]
     os.system(f'blastn -db {os.path.join(blast_p,blast_db)} -query {os.path.join(samples_p,fasta)}\
-               -out {os.path.join(runs_p,f"{filename}_bcrun.txt")} -outfmt 6 -num_threads 2 -max_target_seqs 7')
+               -out {os.path.join(runs_p,f"{filename}_bcrun.txt")} -outfmt 6 -num_threads {num_threads} -max_target_seqs {max_tar_seq}')
     b_tab=best_blast(runs_p,f"{filename}_bcrun.txt",thres_id=90.0)
     pd.set_option('display.max_colwidth', None)
     metadata=pd.read_table(os.path.join(metadata_p,metadata_f),index_col=False)
@@ -343,7 +345,7 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
         flags['Master']['L_BLAST']=False
     return b_tab
 
-def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,filename:str,fasta:str='to_reblast.fasta') -> dict:
+def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,filename:str,threads:int=2,max_tar_seq:int=7,fasta:str='to_reblast.fasta') -> dict:
 
     '''
     Re-run BLAST analysis on unassigned samples.
@@ -353,11 +355,13 @@ def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str
     blast_p (str): The path to the BLAST database directory.
     runs_p (str): The path to the runs directory.
     filename (str): The name of the sample file.
+    num_threads (int): The number of threads to use for BLAST analysis.
+    max_tar_seq (int): The maximum number of target sequences to return.
     fasta (str): The name of the FASTA file to be analyzed
 
     '''
     os.system(f'blastn -db {os.path.join(blast_p,blast_db)} -query {os.path.join(samples_p,fasta)}\
-               -out {os.path.join(runs_p,f"{filename}_brun.txt")} -outfmt 6 -num_threads 2 -max_target_seqs 7')
+               -out {os.path.join(runs_p,f"{filename}_brun.txt")} -outfmt 6 -num_threads {threads} -max_target_seqs {max_tar_seq}')
     report=best_blast(runs_p,f"{filename}_brun.txt")
     metadata=pd.read_csv(os.path.join(metadata_p,metadata_f),index_col=False)
     for key in report:
@@ -384,24 +388,26 @@ def report_compiler(clust_dict:dict,samples_p:str,filename:str,mappings_dict:dic
     to_report=clust_dict
     if bclust_dict:
         for key in bclust_dict:
-            to_report[key]=[]
-            to_report[key].append(bclust_dict[key][0])
-            to_report[key].append(bclust_dict[key][2])
-            to_report[key].append(bclust_dict[key][1])
-            to_report[key].append(bclust_dict[key][3])
-            to_report[key].append(convert_to_prop(bclust_dict[key][4]))
-            to_report[key].append(convert_to_prop(bclust_dict[key][5]))
-            to_report[key].append('C-BLAST')
+            if key not in to_report:
+                to_report[key]=[]
+                to_report[key].append(bclust_dict[key][0])
+                to_report[key].append(bclust_dict[key][2])
+                to_report[key].append(bclust_dict[key][1])
+                to_report[key].append(bclust_dict[key][3])
+                to_report[key].append(convert_to_prop(bclust_dict[key][4]))
+                to_report[key].append(convert_to_prop(bclust_dict[key][5]))
+                to_report[key].append('C-BLAST')
     if blast_dict:
         for key in blast_dict:
-            to_report[key]=[]
-            to_report[key].append(blast_dict[key][0])
-            to_report[key].append('UNCLUSTERED')
-            to_report[key].append(blast_dict[key][1])
-            to_report[key].append(blast_dict[key][2].replace(' ',''))
-            to_report[key].append(blast_dict[key][3].replace(' ',''))
-            to_report[key].append(blast_dict[key][4])
-            to_report[key].append('L-BLAST')
+            if key not in to_report:
+                to_report[key]=[]
+                to_report[key].append(blast_dict[key][0])
+                to_report[key].append('UNCLUSTERED')
+                to_report[key].append(blast_dict[key][1])
+                to_report[key].append(blast_dict[key][2].replace(' ',''))
+                to_report[key].append(blast_dict[key][3].replace(' ',''))
+                to_report[key].append(blast_dict[key][4])
+                to_report[key].append('L-BLAST')
     assigned=set(to_report.keys())
     seqs=set(seqs)
     to_remote=seqs-assigned
@@ -617,21 +623,21 @@ def remap_flumut_report(reports_dir: str, mappings: dict, filename: str) -> None
     Returns:
     None. The function modifies the flumut report files in-place by replacing the original sequence names with the new names.
     """
-    # Create a mapping dictionary with the original sequence names replaced by the new names
+    #Create a mapping dictionary with the original sequence names replaced by the new names
     mapping_dict = {key.replace('>', ''): value for key, value in mappings.items()}
 
-    # Read the markers report file and replace the original sequence names with the new names
+    #Read the markers report file and replace the original sequence names with the new names
     mk_report = pd.read_table(os.path.join(reports_dir,f'{filename}_markers.tsv'))
     mk_report = mk_report.replace(mapping_dict)
 
-    # Read the mutations report file and replace the original sequence names with the new names
+    #Read the mutations report file and replace the original sequence names with the new names
     mut_report = pd.read_table(os.path.join(reports_dir,f'{filename}_mutations.tsv'))
     mut_report = mut_report.replace(mapping_dict)
 
-    # Save the modified markers report file
+    #Save the modified markers report file
     mk_report.to_csv(os.path.join(reports_dir,f'{filename}_markers.tsv'), sep='\t', index=False)
 
-    # Save the modified mutations report file
+    #Save the modified mutations report file
     mut_report.to_csv(os.path.join(reports_dir,f'{filename}_mutations.tsv'), sep='\t', index=False)
 
 #### GET REFERENCE PATH
@@ -772,6 +778,15 @@ def main(flagdict=flagdict):
     print('Remove previous files:',rm_previous)
     print('Configuration file:',config_file)
     print('Sample File:',filename)
+    max=int(config["Sequence_Size"]["max"]) if not args.max_length else args.max_length
+    min=int(config["Sequence_Size"]["min"]) if not args.min_length else args.min_length
+    print('Max sequence length:',max)
+    print('Min sequence length:',min)
+    threads=int(config['blast']['num_threads'])
+    num_seqs=int(config['blast']['max_target_seqs'])
+    print('Number of threads:',threads)
+    print('Max target sequences:',num_seqs)
+    print('Update Flumut DB:',update_flumut)
     #### CHECK PATHS
     if os.path.exists(samples_p):
         if os.path.exists(runs_p):
@@ -820,8 +835,7 @@ def main(flagdict=flagdict):
     dict_cluster=pkl_load(os.path.join(clusters_p,config["Filenames"]["cluster_pkl"]))
     
     ###PIPELINE STEPS
-    max=int(config["Sequence_Size"]["max"]) if not args.max_length else args.max_length
-    min=int(config["Sequence_Size"]["min"]) if not args.min_length else args.min_length
+   
     mappings=fasta_preprocess(filename,samples_p,runs_p,min,max,flags,verbose=True)
     file=filename.replace('.fasta','')
     cd_hit_est_2d(os.path.join(runs_p,f'format_{filename}'),os.path.join(clusters_p,config["Filenames"]["cluster"]),os.path.join(runs_p,f'format_{file}'),float(config["CD-HIT"]["identity"]),logs_p,verbose=True)
@@ -829,10 +843,13 @@ def main(flagdict=flagdict):
     assignments=cluster_assign(f'format_{file}.clstr',os.path.join(runs_p,f'format_{filename}'),runs_p)
     cluster_compile(assignments,dict_cluster,os.path.join(runs_p,f'format_{file}.assign'),reports_p)
     cluster_report=cluster_miner(reports_p,file,runs_p,runs_p,flags)
+    threads=config['blast']['num_threads']
+    num_seqs=config['blast']['max_target_seqs']
+
     if flags['Master']['C_BLAST']:
-        blast_cluster=bclust(clusters_p,config["Filenames"]["cluster_metadata"],runs_p,blasts_p,config["Filenames"]["cluster"],runs_p,filename,flags,fasta=f"{filename.replace('.fasta','')}_to_blast.fasta")
+        blast_cluster=bclust(clusters_p,config["Filenames"]["cluster_metadata"],runs_p,blasts_p,config["Filenames"]["cluster"],runs_p,filename,flags,num_threads=int(threads),max_tar_seq=int(num_seqs),fasta=f"{filename.replace('.fasta','')}_to_blast.fasta")
         if flags['Master']['L_BLAST']:
-            blast_report=reblast(metadata_p,config["Filenames"]["metadata"],runs_p,blasts_p,config["Filenames"]["l_blast"],runs_p,filename,fasta=f"{filename.replace('.fasta','')}_to_reblast.fasta")
+            blast_report=reblast(metadata_p,config["Filenames"]["metadata"],runs_p,blasts_p,config["Filenames"]["l_blast"],runs_p,filename,threads=int(threads),max_tar_seq=int(num_seqs),fasta=f"{filename.replace('.fasta','')}_to_reblast.fasta")
             report_compiler(cluster_report,runs_p,filename,mappings,reports_p,flags,bclust_dict=blast_cluster,blast_dict=blast_report)
         else:
             report_compiler(cluster_report,runs_p,filename,mappings,reports_p,flags,bclust_dict=blast_cluster)

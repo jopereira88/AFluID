@@ -6,9 +6,8 @@ import pickle
 import random
 import os
 import shutil
-from structures import segment_syns
+from structures import segment_syns, iupac_nucleotides
 import pandas as pd
-
 
 def strains_get(filename):
     '''Collects accession numbers from a multifasta
@@ -57,7 +56,12 @@ def seq_get(filename):
             name=name.replace(';','_')
             seqs[name]=''
         else:
-            seqs[name]+=fasta[i].strip().upper().replace('-','')
+            seqs[name]+=fasta[i].strip().upper().replace('-','').replace('X','N')
+    for key in seqs:
+        seqs[key]=seqs[key].replace('U','T')
+        for nuc in seqs[key]:
+            if nuc not in iupac_nucleotides:
+                seqs[key]=seqs[key].replace(nuc,'N')
     return seqs
 
 

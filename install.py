@@ -7,7 +7,7 @@ from collections import Counter
 import pickle
 
 def cluster_charact(metadata,metadata_p,clstr,cluster_p,cluster_pkl_name,cluster_meta_name):
-    meta=metadata_dict(os.path.join(metadata_p,metadata),[9,10,12])
+    meta=metadata_dict(os.path.join(metadata_p,metadata),[9,10,12],sep=';')
     clusters=parse_clstr(os.path.join(cluster_p,clstr))
     #getting metadata annotations per cluster
     cluster_table={}

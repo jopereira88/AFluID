@@ -427,7 +427,7 @@ def report_compiler(clust_dict:dict,samples_p:str,filename:str,mappings_dict:dic
     print(f'Report generated in {os.path.join(reports_p,filename.replace(".fasta",""))}_ID_Report.txt')
 
 #### REDIRECTOR
-def redirector(report:str,flags:dict,filename:str,mappings:dict,samples_p:str,reports_p:str,force_flumut:bool,force_genin:bool,force_getref:bool,mode,single_sample=True) -> None:
+def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,reports_p:str,force_flumut:bool,force_genin:bool,force_getref:bool,mode,single_sample=True) -> None:
     '''
     Redirects samples to aditional post-identification tools.
     Linchpin function that populates the 'Sample' and 'Final_report' dicts of flagsdict
@@ -550,7 +550,7 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,samples_p:str,re
 
     #Opening formatted fasta 
         if single_sample:
-            formatted=seq_get(os.path.join(samples_p,f'format_{filename}'))
+            formatted=seq_get(os.path.join(runs_p,f'format_{filename}'))
             flags['Sample']['HA_len']=len(formatted[flags['Sample']['HA'][0]])
             flags['Sample']['NA_len']=len(formatted[flags['Sample']['NA'][0]])
             flags['Sample']['PB2_len']=len(formatted[flags['Sample']['PB2'][0]])
@@ -865,7 +865,7 @@ def main(flagdict=flagdict):
             flags['Master']['genin']=True
         if 'getref' in args.force:  
             flags['Master']['getref']=True
-    redirector(f"{file}_ID_Report.txt",flags,filename,mappings,samples_p,reports_p,force_flumut=flags['Master']['flumut'],force_genin=flags['Master']['genin'],force_getref=flags['Master']['getref'],mode=mode,single_sample=single)
+    redirector(f"{file}_ID_Report.txt",flags,filename,mappings,runs_p,reports_p,force_flumut=flags['Master']['flumut'],force_genin=flags['Master']['genin'],force_getref=flags['Master']['getref'],mode=mode,single_sample=single)
     #flumut:
     if flags['Master']['flumut']:
         conform_to_flumut(flags,runs_p,filename)

@@ -363,7 +363,7 @@ def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str
     os.system(f'blastn -db {os.path.join(blast_p,blast_db)} -query {os.path.join(samples_p,fasta)}\
                -out {os.path.join(runs_p,f"{filename}_brun.txt")} -outfmt 6 -num_threads {threads} -max_target_seqs {max_tar_seq}')
     report=best_blast(runs_p,f"{filename}_brun.txt")
-    metadata=pd.read_csv(os.path.join(metadata_p,metadata_f),index_col=False)
+    metadata=pd.read_csv(os.path.join(metadata_p,metadata_f),sep=';',index_col=False)
     for key in report:
         report[key].append(metadata['SEGMENT'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
         report[key].append(metadata['GENOTYPE'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
@@ -551,14 +551,14 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,repor
     #Opening formatted fasta 
         if single_sample:
             formatted=seq_get(os.path.join(runs_p,f'format_{filename}'))
-            flags['Sample']['HA_len']=len(formatted[flags['Sample']['HA'][0]])
-            flags['Sample']['NA_len']=len(formatted[flags['Sample']['NA'][0]])
-            flags['Sample']['PB2_len']=len(formatted[flags['Sample']['PB2'][0]])
-            flags['Sample']['PB1_len']=len(formatted[flags['Sample']['PB1'][0]])
-            flags['Sample']['PA_len']=len(formatted[flags['Sample']['PA'][0]])
-            flags['Sample']['NP_len']=len(formatted[flags['Sample']['NP'][0]])
-            flags['Sample']['MP_len']=len(formatted[flags['Sample']['MP'][0]])
-            flags['Sample']['NS_len']=len(formatted[flags['Sample']['NS'][0]])
+            for seg in ('HA','NA','PB2','PB1','PA','NP','NS','MP'):
+                try:
+                    flags['Sample'][f'{seg}_len']=len(formatted[flags['Sample'][seg][0]])
+                except IndexError:
+                    flags['Sample'][f'{seg}_len']=0
+                except KeyError:
+                    flags['Sample'][f'{seg}_len']=0
+                    
     elif mode=='contig':
         flags['Final Report']['Get References']=[value for value in Seq_ref.values()]
         if force_flumut:

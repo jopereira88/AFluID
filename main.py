@@ -7,10 +7,14 @@ import configparser
 import subprocess
 import json
 import glob
+import re
+import numpy as np
+from collections import defaultdict
 from flu_utils import seq_get,dict_to_fasta,headers_from_mult_fas,parse_clstr,pkl_load,\
     seq_filter_get,mine_genotype_H,mine_genotype_N,convert_to_prop, mine_single_HA,mine_single_NA
 from metadata_utils import ClusterReportTable, ClusterMetadata, SequenceMetadata
-from structures import flagdict
+from structures import flagdict, taxa_dict, muts_loci_meaning , int_to_iupac, muts_interest,seg_lens
+from final_report_utils import html_skeleton, generate_final_report
 from copy import deepcopy
 import pandas as pd
 from gb_utils import fetch_genbank_list, append_genbank_from_list, get_gb, create_lookup,\
@@ -95,10 +99,10 @@ def cd_hit_est_2d(filename: str, cluster_reps: str, output:str, identity: float,
 
     '''
     if not verbose:
-        os.system(f'cd-hit-est-2d -i {cluster_reps} -i2 {filename} -o {output} -c {identity}\
+        os.system(f'cd-hit-est-2d -i {cluster_reps} -i2 {filename} -o {output} -c {identity} -g 1\
                    >>{logs_p}{filename}_cd_hit.log 2>>{logs_p}{filename}_cd_hit.err')
     else:
-        os.system(f'cd-hit-est-2d -i {cluster_reps} -i2 {filename} -o {output} -c {identity}')
+        os.system(f'cd-hit-est-2d -i {cluster_reps} -i2 {filename} -o {output} -c {identity} -g 1')
 
 #### CLUSTERING AND CLUSTER REPORT
 def cluster_assign(report:str, headers_file:str,runsdir:str) -> dict:
@@ -211,12 +215,12 @@ def cluster_compile(s_dict:str, cl_dict:dict, cl_assign:str, reports_path:str) -
     
     #outputting report
     with open(f'{outpath}','w') as report:
-        report.write('Sample_access\t%ID\tCluster\tCluster_rep\tGenotypes\tSegment\tHosts\n')
+        report.write('Sample_access\t%ID\tCluster\tCluster_rep\tGenotypes\tSegment\tHosts\tCountries\n')
         for sample in compiler:
             if len(compiler[sample])>2:
                 report.write(f'{sample}\t{compiler[sample][0]}\t\
-                            {compiler[sample][1]}\t{compiler[sample][5]}\t\
-                            {compiler[sample][2]}\t{compiler[sample][3]}\t{compiler[sample][4]}\n')
+                            {compiler[sample][1]}\t{compiler[sample][6]}\t\
+                            {compiler[sample][2]}\t{compiler[sample][3]}\t{compiler[sample][4]}\t{compiler[sample][5]}\n')
             elif len(compiler[sample])==0:
                 continue  
             else:
@@ -240,6 +244,7 @@ def cluster_miner(reports_p:str,filename:str,samples_p:str,runs_p:str,flags:dict
     clust_rep=ClusterReportTable(os.path.join(reports_p,f'{filename}_clust_report.txt'))
     clust_rep.convert_to_prop('genotypes')
     clust_rep.convert_to_prop('hosts')
+    clust_rep.convert_to_prop('countries')
     hs=clust_rep.extract_h()
     ns=clust_rep.extract_n()
     to_blast=[]
@@ -267,6 +272,7 @@ def cluster_miner(reports_p:str,filename:str,samples_p:str,runs_p:str,flags:dict
             to_report[key].append(clust_rep.data[key][4])
             to_report[key].append(clust_rep.data[key][3])
             to_report[key].append(clust_rep.data[key][5])
+            to_report[key].append(clust_rep.data[key][6])
             to_report[key].append('CD-HIT')
     
     #swtting sequences to blast and updating flagsdict
@@ -335,6 +341,9 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
         b_tab[key][4]=eval(b_tab[key][4])
         b_tab[key].append(metadata['Hosts'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
         b_tab[key][5]=eval(b_tab[key][5])
+        b_tab[key].append(metadata['Countries'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
+        b_tab[key][6]=eval(b_tab[key][6])
+
     if list(to_reblast) != []:
         for i in to_reblast:
             flags['BLAST']['Sequences unassigned against cluster representatives'].append(i)
@@ -368,6 +377,7 @@ def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str
         report[key].append(metadata['SEGMENT'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
         report[key].append(metadata['GENOTYPE'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
         report[key].append(metadata['HOST'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
+        report[key].append(metadata['COUNTRY'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
     return report
 
 #### REPORT COMPILER
@@ -396,6 +406,7 @@ def report_compiler(clust_dict:dict,samples_p:str,filename:str,mappings_dict:dic
                 to_report[key].append(bclust_dict[key][3])
                 to_report[key].append(convert_to_prop(bclust_dict[key][4]))
                 to_report[key].append(convert_to_prop(bclust_dict[key][5]))
+                to_report[key].append(convert_to_prop(bclust_dict[key][6]))
                 to_report[key].append('C-BLAST')
     if blast_dict:
         for key in blast_dict:
@@ -407,6 +418,7 @@ def report_compiler(clust_dict:dict,samples_p:str,filename:str,mappings_dict:dic
                 to_report[key].append(blast_dict[key][2].replace(' ',''))
                 to_report[key].append(blast_dict[key][3].replace(' ',''))
                 to_report[key].append(blast_dict[key][4])
+                to_report[key].append(blast_dict[key][5].replace(' ',''))
                 to_report[key].append('L-BLAST')
     assigned=set(to_report.keys())
     seqs=set(seqs)
@@ -416,15 +428,15 @@ def report_compiler(clust_dict:dict,samples_p:str,filename:str,mappings_dict:dic
         for seq in to_remote:
             to_report[seq]=['Unassigned','NA','NA','NA','NA','NA','NA']
     with open(f'{os.path.join(reports_p,filename.replace(".fasta",""))}_ID_Report.txt','w') as report:
-        report.write('Sample_name\tRepresentative\tCluster\t%ID\tSegment\tGenotype\tHost\tAssigned_by\n'.upper())
+        report.write('Sample_name\tRepresentative\tCluster\t%ID\tSegment\tGenotype\tHost\tCountry\tAssigned_by\n'.upper())
         for key in to_report:
             mapped=mappings[f'>{key}']
             report.write(f'{mapped}\t{to_report[key][0]}\t\
                          {to_report[key][1]}\t{to_report[key][2]}\t{to_report[key][3]}\t\
-                            {to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\n')
+                            {to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\t{to_report[key][7]}\n')
     if len(list(to_remote))>0:
         flags['BLAST']['Sequences unassigned against local database'].extend(to_remote)
-    print(f'Report generated in {os.path.join(reports_p,filename.replace(".fasta",""))}_ID_Report.txt')
+    #print(f'Report generated in {os.path.join(reports_p,filename.replace(".fasta",""))}_ID_Report.txt')
 
 #### REDIRECTOR
 def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,reports_p:str,force_flumut:bool,force_genin:bool,force_getref:bool,mode,single_sample=True) -> None:
@@ -540,13 +552,9 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,repor
     if mode == 'consensus':
         if single_sample==False:
             force_flumut==True
-            force_genin==True    
         if flags['Sample']['H_gen']=='H5' or force_flumut:
             for i in Seq_names:
                 flags['Final Report']['Sequences for FluMut'].append(remap[i])
-        if flags['Sample']['H_gen']=='H5' or force_genin:
-            for i in Seq_names:
-                flags['Final Report']['Sequences for GenIn'].append(remap[i])
 
     #Opening formatted fasta 
         if single_sample:
@@ -639,6 +647,68 @@ def remap_flumut_report(reports_dir: str, mappings: dict, filename: str) -> None
 
     #Save the modified mutations report file
     mut_report.to_csv(os.path.join(reports_dir,f'{filename}_mutations.tsv'), sep='\t', index=False)
+def mut_miner(dataframe,muts_of_interest,flagsdict):
+    """
+    Mines the flumut markers report for mutations of interest according to Alvarez et al 2025 and 
+    Mohapra et al 2023.
+    Parameters:
+    dataframe (str): The path to the flumut markers report file.
+    muts_of_interest (dict): A dictionary containing mutations of interest for each segment.
+    flagsdict (dict): A dictionary to store the mined mutations of interest.
+    Returns:
+    None: This function does not return a value. It updates the flagsdict with the mined 
+    """
+    # Load mutations of interest from pickle file
+    # MUTATION PATTERN
+    mut_patt=r'([A-Z])(\d+)([A-Z])'
+    # Read the DataFrame
+    df=pd.read_table(dataframe, index_col=False)
+    samples=list(df['Sample'].unique())
+    sample_muts={}
+    for i in samples:
+        sample_muts[i]=set()
+        list_i=df['Mutations in your sample'][df['Sample']==i].to_list()
+        for j in list_i:
+            sample_muts[i].add(j)
+        sample_muts[i]=list(sample_muts[i])
+    sample_seg={sample:set() for sample in sample_muts}
+    for sample in sample_muts:
+        for i in range(len(sample_muts[sample])):
+            sample_seg[sample].add(sample_muts[sample][i].split(':')[0])
+            sample_muts[sample][i]=sample_muts[sample][i].split(':')[1]
+    loci_seg={'PB1-F2': 'PB1', 'PA-X': 'PA', 'HA1-5': 'HA', 'HA2-5': 'HA', 'NA-1':'NA', 'NA-2':'NA','M1':'MP', 'M2':'MP', 'NS-1':'NS', 'NS-2':'NS'}
+    for sample in sample_seg:
+        sample_seg[sample]=list(sample_seg[sample])
+    for sample in sample_seg:
+        for i in sample_seg[sample]:
+            if i in loci_seg.keys():
+                sample_seg[sample].append(loci_seg[i])
+                sample_seg[sample].remove(i)
+    for i in sample_seg:
+        for j in sample_seg[i]:
+            if j in loci_seg.keys():
+                sample_seg[i].remove(j)
+    for sample in sample_seg:
+        sample_seg[sample]=set(sample_seg[sample])
+    for sample in sample_muts:
+        for i in range(len(sample_muts[sample])):
+            ex=re.match(mut_patt,sample_muts[sample][i])
+            if ex:
+                sample_muts[sample][i]=f'{ex.group(2)}{ex.group(3)}'
+    sample_muts_of_interest={sample: {seg: set() for seg in sample_seg[sample]} for sample in sample_muts}
+    for sample in sample_muts_of_interest:
+        for segment in sample_muts_of_interest[sample]:
+            if segment in muts_of_interest.keys():    
+                for mut in sample_muts[sample]:
+                    if mut in muts_of_interest[segment]:
+                        sample_muts_of_interest[sample][segment].add(mut)
+    for i in sample_muts_of_interest:
+        for j in sample_muts_of_interest[i]:
+            sample_muts_of_interest[i][j]=list(sample_muts_of_interest[i][j])
+            #flagsdict["Sample"][f"{j}_muts"]=[]
+            for mut in sample_muts_of_interest[i][j]:
+                #print(f'Sample: {i} | Segment: {j} | Mutation: {mut}')
+                flagsdict["Sample"][f"{j}_muts"].append(mut)
 
 #### GET REFERENCE PATH
 def get_reference(listref,references_p,db_p,filename,email=None, update_local_db=False):
@@ -702,7 +772,60 @@ def remap_nextclade(reports_p,nextclade_report,mappings_dict):
     nextclade_rep=pd.read_table(os.path.join(reports_p,nextclade_report),index_col=False)
     nextclade_rep['seqName']=nextclade_rep['seqName'].apply(lambda x: mappings_dict[f'>{x}'])
     nextclade_rep.to_csv(os.path.join(reports_p,nextclade_report), sep='\t', index=False)
-    
+
+#### GENIN PATH
+
+def mine_clade(clade_file, flagsdict, mappings_dict):
+  """
+  Mines the clade from the NextClade report file based on the HA genotype.
+  Parameters:
+  clade_file (str): The path to the NextClade report file.
+  flagsdict (dict): A dictionary containing flags and sequence information, including HA genotype and sequences
+  mappings_dict (dict): A dictionary containing the mapping of original sequence names to new names.
+  Returns:
+  str: The clade information extracted from the NextClade report file."""
+  
+  clade=""
+  if flagsdict["Sample"]["H_gen"] in ["H1","H3","H5"] and\
+          len(set(flagsdict["Final Report"]["Sequences for NextClade"][flagsdict["Sample"]["H_gen"]]))==1:
+      seq=mappings_dict[flagsdict['Sample']['HA'][-1]] #change after modifying pipeline to add mappings_dict
+      nc=pd.read_table(clade_file, index_col=False)
+      nc["seqName"]=nc["seqName"].str.strip()
+      if nc['errors'][nc['seqName']==seq].to_string(index=False) == np.nan:
+        clade='Unassigned by error'
+      else:
+        clade=nc['clade'][nc['seqName']==seq].to_string(index=False)
+  else:
+    clade="Non-applicable"
+  return clade.strip()
+
+def to_genin2(flagsdict):
+    """
+    Determines if the sample should be directed to GenIn2 based on HA genotype and clade
+    Parameters:
+    flagsdict (dict): A dictionary containing flags and sequence information, including HA genotype and clade.
+    Returns:
+    bool: True if the sample should be directed to GenIn2, False otherwise."""
+    if flagsdict["Sample"]["H_gen"] == "H5":
+        if flagsdict["Sample"]["clade"] == "2.3.4.4b":
+            return True
+    return False
+
+def run_genin2(flagsdict, samples_p, filename, reports_p):
+    """
+    Executes the GenIn2 tool for genotyping analysis based on HA genotype and clade.
+    Parameters:
+    flagsdict (dict): A dictionary containing flags and sequence information, including HA genotype and clade.
+    samples_p (str): The path to the directory containing the sample FASTA file.
+    filename (str): The name of the FASTA file to be processed.
+    reports_p (str): The path to the directory where the report files will be stored.
+    Returns:
+    None: This function does not return a value. It executes a system command to run GenIn2 and generate output files."""
+    pass
+
+
+
+#### MAIN
 def parser():
     parser=argparse.ArgumentParser(prog='AFluID',description='AFluID: Automated Influenza Identification Pipeline')
     parser.add_argument('-c','--config',type=str,help='Configuration file path',default='config.ini',required=False)
@@ -718,11 +841,14 @@ def parser():
     args=parser.parse_args()
     return args
 
+
+
 def main(flagdict=flagdict):
     ''' Main function for the pipeline'''
    
     ####LOAD FLAG DICT
     flags=deepcopy(flagdict)
+    muts_of_interest=muts_interest
     args=parser()
     filename=args.filename
     config_file=args.config
@@ -873,6 +999,7 @@ def main(flagdict=flagdict):
             update_flumut_db()
         run_flumut(reports_p,runs_p,file)
         remap_flumut_report(reports_p,mappings,file)
+        mut_miner(os.path.join(reports_p,f'{file}_markers.tsv'),muts_of_interest,flags)
     #NextClade
     if flags['Master']['nextclade']:
         
@@ -880,15 +1007,27 @@ def main(flagdict=flagdict):
         run_nextclade(f'{file}_to_nextclade',flags,reports_p,runs_p,file)
         if flags['Final Report']['Sequences for NextClade']['H1']!=[]:
             remap_nextclade(reports_p,f"{file}_H1_nextclade.tsv",mappings)
+            flags['Sample']['clade']=mine_clade(os.path.join(reports_p,f"{file}_H1_nextclade.tsv"),flags,mappings)
         if flags['Final Report']['Sequences for NextClade']['H3']!=[]:
             remap_nextclade(reports_p,f"{file}_H3_nextclade.tsv",mappings)
+            flags['Sample']['clade']=mine_clade(os.path.join(reports_p,f"{file}_H3_nextclade.tsv"),flags,mappings)
         if flags['Final Report']['Sequences for NextClade']['H5']!=[]:
             remap_nextclade(reports_p,f"{file}_H5_nextclade.tsv",mappings)
+            flags['Sample']['clade']=mine_clade(os.path.join(reports_p,f"{file}_H5_nextclade.tsv"),flags,mappings)
     
     #get reference:
     if flags['Master']['getref']:
         get_reference(flags['Final Report']['Get References'],references_p,config['Filenames']['ref_db'],filename,email=config['getref']['email'],update_local_db=True)
+
+    #Genin2
+    flags['Master']['genin']=to_genin2(flags)
+
+    #final report
+    if flags['Master']['single']:
+        generate_final_report(os.path.join(reports_p,f"{file}_ID_Report.txt"),flags,seg_lens,mappings,muts_loci_meaning,html_skeleton,reports_p,f'{file}_final_report')
     
+
+
     #getting flagsdict into json
     with open(f'{os.path.join(reports_p,file)}_flags.json','w') as f:
         json.dump(flags,f)

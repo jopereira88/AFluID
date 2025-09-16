@@ -39,7 +39,7 @@ class MetadataTable(ABC):
                             if i != self.key_index:
                                 data[line[self.key_index]].append(line[i])
 
-            print(f'Data loaded from {self.filename}, successfully.')
+            #print(f'Data loaded from {self.filename}, successfully.')
         except Exception as e:
             print(f'Failed to load data from {self.filename}: {e}')
             raise 
@@ -648,7 +648,6 @@ class ClusterReportTable(MetadataTable):
                     for i in dic:
                         dic[i]=(dic[i]/tot)
                         dic[i]=round(dic[i],3)
-                        dic[i]=f'{dic[i] * 100:.3f}%'
                     perc[key]=dic
             except IndexError:
                 continue

@@ -7,20 +7,22 @@ from collections import Counter
 import pickle
 
 def cluster_charact(metadata,metadata_p,clstr,cluster_p,cluster_pkl_name,cluster_meta_name):
-    meta=metadata_dict(os.path.join(metadata_p,metadata),[9,10,12],sep=';')
+    meta=metadata_dict(os.path.join(metadata_p,metadata),[9,10,12,11],sep=';')
     clusters=parse_clstr(os.path.join(cluster_p,clstr))
     #getting metadata annotations per cluster
     cluster_table={}
     for key in clusters:
-        cluster_table[key]=[Counter(),Counter(),Counter()]
+        cluster_table[key]=[Counter(),Counter(),Counter(),Counter()] #genotype,segment,host,country
         for value in clusters[key]:
             cluster_table[key][0][meta[value][0]]+=1
             cluster_table[key][1][meta[value][1]]+=1
             cluster_table[key][2][meta[value][2]]+=1
+            cluster_table[key][3][meta[value][3]]+=1
     for elem in cluster_table:
         cluster_table[elem][0]=dict(cluster_table[elem][0])
         cluster_table[elem][1]=dict(cluster_table[elem][1])
         cluster_table[elem][2]=dict(cluster_table[elem][2])
+        cluster_table[elem][3]=dict(cluster_table[elem][3])
     #getting cluster representatives
     clusters=parse_clstr(os.path.join(cluster_p,clstr),access_only=False)
     cluster_reps={}
@@ -33,9 +35,9 @@ def cluster_charact(metadata,metadata_p,clstr,cluster_p,cluster_pkl_name,cluster
     with open(os.path.join(cluster_p,cluster_pkl_name),'wb') as save:
         pickle.dump(cluster_table,save)
     with open(os.path.join(cluster_p,cluster_meta_name),'w') as file:
-        file.write(f'Cluster\tRepresentative\tGenotypes\tSegments\tHosts\n')
+        file.write(f'Cluster\tRepresentative\tGenotypes\tSegments\tHosts\tCountries\n')
         for elem in cluster_table:
-            file.write(f'{elem}\t{cluster_table[elem][3]}\t{cluster_table[elem][0]}\t{cluster_table[elem][1]}\t{cluster_table[elem][2]}\n')
+            file.write(f'{elem}\t{cluster_table[elem][4]}\t{cluster_table[elem][0]}\t{cluster_table[elem][1]}\t{cluster_table[elem][2]}\t{cluster_table[elem][3]}\n')
 
 if __name__ == '__main__':
     config_file=sys.argv[1]
@@ -52,9 +54,9 @@ if __name__ == '__main__':
     #check if required paths exist
     for path in ['samples', 'runs', 'references', 'reports', 'logs', 'blast_database', 'cluster_database', 'metadata']:
         os.makedirs(config['Paths'][path],exist_ok=True)
-    if os.environ.get('CONDA_PREFIX') != config['Functions']['conda_env']:
-        print('Error: conda environment not activated.')
-        sys.exit(1)
+    #if os.environ.get('CONDA_PREFIX') != config['Functions']['conda_env']:
+        #print('Error: conda environment not activated.')
+        #sys.exit(1)
     #check metadata and references files
     metadata=config['Filenames']['metadata']
     references=config['Filenames']['ref_db']
@@ -80,7 +82,7 @@ if __name__ == '__main__':
     if not os.path.exists(os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster_clstr"])):    
         os.system(f'cd-hit-est -i {config["Filenames"]["l_blast"]}.fasta\
                -o {os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster"])}\
-                  -c {config["CD-HIT"]["identity"]} -M {config["CD-HIT"]["memory"]}')
+                  -c {config["CD-HIT"]["identity"]} -g 1 -M {config["CD-HIT"]["memory"]}')
     #creating cluster metadata file
     print('Creating cluster metadata...')
     if not os.path.exists(os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster_metadata"])):

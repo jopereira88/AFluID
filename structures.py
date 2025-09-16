@@ -489,7 +489,7 @@ muts_loci_meaning={'156A':('HA:156A','Increased virus binding to α2,6, increase
                    '221D':('HA:221D','Increased virus binding to α2,6'), 
                    '222L':('HA:222L','Increased virus binding to α2,6; transmitted via aerosol among guinea pigs; enhanced replication in mammalian cells and ferrets, enhanced contact transmission in ferrets; Loss of binding to α2,3; Increased acid and thermal stability'), 
                    '224S':('HA:224S','Increased binding to α2,6; increased viral replication in mammalian cells and virulence in mice; observed in human isolate; increase in the ability of the virus to infect mammals; decreased virus binding to α2,3'), 
-                   '208T':('HA:208T,Increased the viral replication in avian and mammalian cells; enhance viral replication in mice'),
+                   '208T':('HA:208T','Increased the viral replication in avian and mammalian cells; enhance viral replication in mice'),
                    '399R':('NA:399R','Mutation of 2SBS that are detrimental to the cleavage of sialosides linked to fetuin or transferrin; observed in seals'), 
                    '432E':('NA:432E','Decreased cleavage of fetuin-containing α2,3-linked sialic acids (SIAs) but not that of monovalent substrates or of transferrin containing only α2,6-linked SIAs'), 
                    '275Y':('NA:275Y','Resistance to antivirals: Oseltamivir and Peramivir'), 

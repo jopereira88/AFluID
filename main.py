@@ -1,4 +1,4 @@
-#!/home/joao/miniconda3/envs/fluid/bin/python3.10
+#!/usr/bin/env python3
 #### IMPORT DEPENDENCIES
 import os
 import sys
@@ -6,6 +6,7 @@ import argparse
 import configparser
 import subprocess
 import json
+import ast
 import glob
 import re
 import numpy as np
@@ -99,10 +100,10 @@ def cd_hit_est_2d(filename: str, cluster_reps: str, output:str, identity: float,
 
     '''
     if not verbose:
-        os.system(f'cd-hit-est-2d -i {cluster_reps} -i2 {filename} -o {output} -c {identity} -g 1\
-                   >>{logs_p}{filename}_cd_hit.log 2>>{logs_p}{filename}_cd_hit.err')
+        with open(f'{logs_p}{filename}_cd_hit.log', 'a') as out, open(f'{logs_p}{filename}_cd_hit.err', 'a') as err:
+            subprocess.run(['cd-hit-est-2d', '-i', cluster_reps, '-i2', filename, '-o', output, '-c', str(identity), '-g', '1'], stdout=out, stderr=err)
     else:
-        os.system(f'cd-hit-est-2d -i {cluster_reps} -i2 {filename} -o {output} -c {identity} -g 1')
+        subprocess.run(['cd-hit-est-2d', '-i', cluster_reps, '-i2', filename, '-o', output, '-c', str(identity), '-g', '1'])
 
 #### CLUSTERING AND CLUSTER REPORT
 def cluster_assign(report:str, headers_file:str,runsdir:str) -> dict:
@@ -325,8 +326,8 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
     '''
     access=headers_from_mult_fas([os.path.join(samples_p,fasta)],only_name=True)
     queries=[key for key in access]
-    os.system(f'blastn -db {os.path.join(blast_p,blast_db)} -query {os.path.join(samples_p,fasta)}\
-               -out {os.path.join(runs_p,f"{filename}_bcrun.txt")} -outfmt 6 -num_threads {num_threads} -max_target_seqs {max_tar_seq}')
+    subprocess.run(['blastn', '-db', os.path.join(blast_p,blast_db), '-query', os.path.join(samples_p,fasta),
+               '-out', os.path.join(runs_p,f"{filename}_bcrun.txt"), '-outfmt', '6', '-num_threads', str(num_threads), '-max_target_seqs', str(max_tar_seq)])
     b_tab=best_blast(runs_p,f"{filename}_bcrun.txt",thres_id=90.0)
     pd.set_option('display.max_colwidth', None)
     metadata=pd.read_table(os.path.join(metadata_p,metadata_f),index_col=False)
@@ -336,13 +337,13 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
     for key in b_tab:
         b_tab[key].append(metadata['Cluster'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
         b_tab[key].append(metadata['Segments'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
-        b_tab[key][3]=eval(b_tab[key][3])
+        b_tab[key][3]=ast.literal_eval(b_tab[key][3])
         b_tab[key].append(metadata['Genotypes'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
-        b_tab[key][4]=eval(b_tab[key][4])
+        b_tab[key][4]=ast.literal_eval(b_tab[key][4])
         b_tab[key].append(metadata['Hosts'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
-        b_tab[key][5]=eval(b_tab[key][5])
+        b_tab[key][5]=ast.literal_eval(b_tab[key][5])
         b_tab[key].append(metadata['Countries'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
-        b_tab[key][6]=eval(b_tab[key][6])
+        b_tab[key][6]=ast.literal_eval(b_tab[key][6])
 
     if list(to_reblast) != []:
         for i in to_reblast:
@@ -369,8 +370,8 @@ def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str
     fasta (str): The name of the FASTA file to be analyzed
 
     '''
-    os.system(f'blastn -db {os.path.join(blast_p,blast_db)} -query {os.path.join(samples_p,fasta)}\
-               -out {os.path.join(runs_p,f"{filename}_brun.txt")} -outfmt 6 -num_threads {threads} -max_target_seqs {max_tar_seq}')
+    subprocess.run(['blastn', '-db', os.path.join(blast_p,blast_db), '-query', os.path.join(samples_p,fasta),
+               '-out', os.path.join(runs_p,f"{filename}_brun.txt"), '-outfmt', '6', '-num_threads', str(threads), '-max_target_seqs', str(max_tar_seq)])
     report=best_blast(runs_p,f"{filename}_brun.txt")
     metadata=pd.read_csv(os.path.join(metadata_p,metadata_f),sep=';',index_col=False)
     for key in report:
@@ -451,7 +452,7 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,repor
     #opening report and extracting data
     report=pd.read_table(os.path.join(reports_p,report), index_col=False)
     report=report.dropna()
-    report['SEGMENT']=report['SEGMENT'].apply(lambda x: eval(x))
+    report['SEGMENT']=report['SEGMENT'].apply(lambda x: ast.literal_eval(x))
     report['SEGMENT']=report['SEGMENT'].apply(lambda x: list(x.keys())[0] if type(x)==dict else int(x))
     Segments=report['SEGMENT'].to_list()
     Genotypes=report['GENOTYPE'].to_list()
@@ -459,7 +460,7 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,repor
     #Type conversions and dictionary creations
     for i in range(len(Genotypes)):
         try:
-            Genotypes[i]=eval(Genotypes[i])
+            Genotypes[i]=ast.literal_eval(Genotypes[i])
         except NameError:
             continue
         Genotypes[i]=list(Genotypes[i].keys()) if\
@@ -579,7 +580,7 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,repor
 
 #### FLUMUT PATH
 def update_flumut_db():
-    os.system('flumut --update')
+    subprocess.run(['flumut', '--update'])
 
 def conform_to_flumut(flagdict: dict, sample_path: str, filename: str) -> None:
     """
@@ -619,7 +620,8 @@ def run_flumut(reports_p: str, samples_p: str, filename: str, regex="(.+)\|(.+)"
     None: This function does not return a value. It executes a system command to run flumut and generate output files.
     """
     print("Running flumut")
-    os.system(f'flumut -m {os.path.join(reports_p,f"{filename}_markers.tsv")} -M {os.path.join(reports_p,f"{filename}_mutations.tsv")} -l {os.path.join(reports_p,f"{filename}_literature.tsv")} {os.path.join(samples_p,f"{filename}_to_flumut.fasta")} -n "{regex}"')
+    subprocess.run(['flumut', '-m', os.path.join(reports_p,f"{filename}_markers.tsv"), '-M', os.path.join(reports_p,f"{filename}_mutations.tsv"),
+                    '-l', os.path.join(reports_p,f"{filename}_literature.tsv"), os.path.join(samples_p,f"{filename}_to_flumut.fasta"), '-n', regex])
 def remap_flumut_report(reports_dir: str, mappings: dict, filename: str) -> None:
     """
     Remaps flumut report to the sample names.
@@ -760,7 +762,7 @@ def run_nextclade(fasta,flagsdict,reports_p,samples_p,filename):
     for key in flagsdict['Final Report']['Sequences for NextClade']:
         if flagsdict['Final Report']['Sequences for NextClade'][key] != []:
             fasta_gen=key    
-            os.system(f'nextclade run -d {dict_builds_broad[fasta_gen]} --output-tsv {os.path.join(reports_p,f"{filename}_{fasta_gen}_nextclade.tsv")} {os.path.join(samples_p,f"{fasta}_{fasta_gen}.fasta")}')
+            subprocess.run(['nextclade', 'run', '-d', dict_builds_broad[fasta_gen], '--output-tsv', os.path.join(reports_p,f"{filename}_{fasta_gen}_nextclade.tsv"), os.path.join(samples_p,f"{fasta}_{fasta_gen}.fasta")])
 def remap_nextclade(reports_p,nextclade_report,mappings_dict):
     """
     Remaps NextClade report to the sample names.
@@ -880,7 +882,7 @@ def main(flagdict=flagdict):
         for i in off_apps:
             print(f'Turning off: {i}')
             flags['Master'][i]=False
-#### SET PATHS
+    #### SET PATHS
     samples=config['Paths']['samples']
     runs=config['Paths']['runs']
     references=config['Paths']['references']
@@ -892,14 +894,14 @@ def main(flagdict=flagdict):
     rm_previous=config['Functions']['remove_previous'] if\
           args.remove_previous.lower()=='on' else False
     cwd=os.getcwd()
-    samples_p=os.path.join(cwd,samples)
-    runs_p=os.path.join(cwd,runs)
-    references_p=os.path.join(cwd,references)
-    reports_p=os.path.join(cwd,reports)
-    logs_p=os.path.join(cwd,logs)
-    blasts_p=os.path.join(cwd,blasts)
-    clusters_p=os.path.join(cwd,clusters)
-    metadata_p=os.path.join(cwd,metadata)
+    samples_p=os.path.abspath(os.path.join(cwd,samples))
+    runs_p=os.path.abspath(os.path.join(cwd,runs))
+    references_p=os.path.abspath(os.path.join(cwd,references))
+    reports_p=os.path.abspath(os.path.join(cwd,reports))
+    logs_p=os.path.abspath(os.path.join(cwd,logs))
+    blasts_p=os.path.abspath(os.path.join(cwd,blasts))
+    clusters_p=os.path.abspath(os.path.join(cwd,clusters))
+    metadata_p=os.path.abspath(os.path.join(cwd,metadata))
     print('Single sample mode:',single)
     print('Remove previous files:',rm_previous)
     print('Configuration file:',config_file)

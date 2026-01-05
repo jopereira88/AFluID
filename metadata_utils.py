@@ -2,6 +2,7 @@
 from abc import ABC, abstractmethod
 import re
 import pickle
+import ast
 from collections import namedtuple
 
 
@@ -233,7 +234,7 @@ class ClusterMetadata(MetadataTable):
         '''
         for key in self.data:
              for i in range(1,len(self.data[key])):
-                self.data[key][i]=eval(self.data[key][i])
+                self.data[key][i]=ast.literal_eval(self.data[key][i])
     
     def update_metadata(self):
         return super().update_metadata()
@@ -494,7 +495,7 @@ class ClusterReportTable(MetadataTable):
         '''
         for key in self.data:
              for i in range(3,len(self.data[key])):
-                self.data[key][i]=eval(self.data[key][i])
+                self.data[key][i]=ast.literal_eval(self.data[key][i])
 
     def validate_metadata(self):
         return super().validate_metadata()
@@ -706,7 +707,7 @@ class BlastClustReportTable(ClusterReportTable):
              for i in range(4,len(self.data[key])):
                 try:
                     if type(self.data[key][i])==str:
-                        self.data[key][i]=eval(self.data[key][i])
+                        self.data[key][i]=ast.literal_eval(self.data[key][i])
                 except NameError:
                     self.data[key][i]=str(self.data[key][i])
     def export_metadata(self):

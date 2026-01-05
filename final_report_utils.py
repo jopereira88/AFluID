@@ -1,4 +1,5 @@
 from collections import defaultdict
+import ast
 from structures import geo_dict, taxa_dict, muts_interest, seg_lens, muts_loci_meaning
 import pandas as pd
 import os
@@ -76,7 +77,7 @@ def normalize(counter):
 def clean_host(host_cell, taxa_dict, level='Species', drop_unknown=True):
     host_dict=host_cell.strip()
     host_dict=host_dict.replace('%','')
-    host_dict=eval(host_dict)
+    host_dict=ast.literal_eval(host_dict)
     for key in host_dict:
         host_dict[key]=float(host_dict[key])
     host_dict=rollup_counts_taxa(host_dict, taxa_dict, level, drop_unknown)
@@ -91,7 +92,7 @@ def clean_host(host_cell, taxa_dict, level='Species', drop_unknown=True):
 def clean_country(country_cell, geo_dict, level='country', drop_unknown=True):
     country_dict=country_cell.strip()
     country_dict=country_dict.replace('%','')
-    country_dict=eval(country_dict)
+    country_dict=ast.literal_eval(country_dict)
     for key in country_dict:
         country_dict[key]=float(country_dict[key])
     country_dict=rollup_counts_geo(country_dict, geo_dict, level, drop_unknown)
@@ -106,7 +107,7 @@ def clean_country(country_cell, geo_dict, level='country', drop_unknown=True):
 def clean_genotype(genotype_cell):
     genotype_dict=genotype_cell.strip()
     genotype_dict=genotype_dict.replace('%','')
-    genotype_dict=eval(genotype_dict)
+    genotype_dict=ast.literal_eval(genotype_dict)
     for key in genotype_dict:
         genotype_dict[key]=float(genotype_dict[key])
     if sum(genotype_dict.values())>1.0:
@@ -281,7 +282,7 @@ def create_segment_background_table(df_segments,flags,seg_lens,mappings):
     mask=df['ASSIGNED_BY']!='L-BLAST'
     df.loc[mask,'HOST']=df.loc[mask,'HOST'].apply(lambda x: clean_host(x,taxa_dict,level='Species',drop_unknown=True))
     df.loc[mask,'GENOTYPE']=df.loc[mask,'GENOTYPE'].apply(lambda x: clean_genotype(x))
-    df.loc[mask,'COUNTRY']=df.loc[mask,'COUNTRY'].apply(lambda x: eval(x) if x.startswith('{') else x)
+    df.loc[mask,'COUNTRY']=df.loc[mask,'COUNTRY'].apply(lambda x: ast.literal_eval(x) if x.startswith('{') else x)
     for row in range(len(df)):
         seq=df.loc[row,'SAMPLE_NAME']
         segment=seq_names[seq] if seq in seq_names else "Not Available"

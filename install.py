@@ -2,6 +2,7 @@ import os
 import sys
 import configparser
 import shutil
+import subprocess
 from flu_utils import metadata_dict,parse_clstr
 from collections import Counter
 import pickle
@@ -53,7 +54,10 @@ if __name__ == '__main__':
     cwd=os.getcwd()
     #check if required paths exist
     for path in ['samples', 'runs', 'references', 'reports', 'logs', 'blast_database', 'cluster_database', 'metadata']:
-        os.makedirs(config['Paths'][path],exist_ok=True)
+        full_path = os.path.abspath(os.path.join(cwd, config['Paths'][path]))
+        os.makedirs(full_path, exist_ok=True)
+        # Update config object in memory so subsequent calls use the full path
+        config['Paths'][path] = full_path
     #if os.environ.get('CONDA_PREFIX') != config['Functions']['conda_env']:
         #print('Error: conda environment not activated.')
         #sys.exit(1)
@@ -64,25 +68,22 @@ if __name__ == '__main__':
         print(f'Error: {metadata} not found.')
         sys.exit(1)
     else:
-        shutil.move(metadata,os.path.join(cwd,config['Paths']['metadata'],metadata))
+        shutil.move(metadata,os.path.join(config['Paths']['metadata'],metadata))
     if not os.path.exists(references):
         with open(references,'a') as f:
             os.utime(references,None)
-            shutil.move(references,os.path.join(cwd,config['Paths']['references'],references))
+            shutil.move(references,os.path.join(config['Paths']['references'],references))
     else:
-        shutil.move(references,os.path.join(cwd,config['Paths']['references'],references))
+        shutil.move(references,os.path.join(config['Paths']['references'],references))
     print('Files moved successfully.')
     print('Creating blast database...')
     #create blast database
     if not os.path.exists(os.path.join(config["Paths"]["blast_database"],f'{config["Filenames"]["l_blast"]}.ndb')):
-        os.system(f'makeblastdb -in {config["Filenames"]["l_blast"]}.fasta\
-            -dbtype nucl -out {os.path.join(config["Paths"]["blast_database"],config["Filenames"]["l_blast"])}')
+        subprocess.run(['makeblastdb', '-in', f'{config["Filenames"]["l_blast"]}.fasta', '-dbtype', 'nucl', '-out', os.path.join(config["Paths"]["blast_database"],config["Filenames"]["l_blast"])])
     #creating cluster database
     print('Creating cluster database...')
     if not os.path.exists(os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster_clstr"])):    
-        os.system(f'cd-hit-est -i {config["Filenames"]["l_blast"]}.fasta\
-               -o {os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster"])}\
-                  -c {config["CD-HIT"]["identity"]} -g 1 -M {config["CD-HIT"]["memory"]}')
+        subprocess.run(['cd-hit-est', '-i', f'{config["Filenames"]["l_blast"]}.fasta', '-o', os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster"]), '-c', config["CD-HIT"]["identity"], '-g', '1', '-M', config["CD-HIT"]["memory"]])
     #creating cluster metadata file
     print('Creating cluster metadata...')
     if not os.path.exists(os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster_metadata"])):
@@ -91,5 +92,4 @@ if __name__ == '__main__':
     #creating representative blast database
     print('Creating representative blast database...')
     if not os.path.exists(os.path.join(config["Paths"]["blast_database"], config["Filenames"]["cluster"])):    
-        os.system(f'makeblastdb -in {os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster"])}\
-              -dbtype nucl -out {os.path.join(config["Paths"]["blast_database"], config["Filenames"]["cluster"])}')
+        subprocess.run(['makeblastdb', '-in', os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster"]), '-dbtype', 'nucl', '-out', os.path.join(config["Paths"]["blast_database"], config["Filenames"]["cluster"])])

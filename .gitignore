@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pkl
+*.log
+*.err
+
+# Configuration
+config.ini
+
+# Data and Output Directories
+blast_db/
+cluster_db/
+logs/
+metadata/
+references/
+reports/
+runs/
+samples/
+
+# Generated Files
+missing_accessions.txt
+
+# IDE/System
+.DS_Store
+.vscode/
+.idea/

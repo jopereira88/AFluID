@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 from abc import ABC, abstractmethod
 import re
-import pickle
+import json
 import ast
 from collections import namedtuple
 
@@ -277,8 +277,8 @@ class ClusterMetadata(MetadataTable):
                             if ex is not None:
                                 clust_gen4[key]=set()
                                 clust_gen4[key].add(ex.group())
-        with open('mixedHclusters.pkl','wb') as pkl:
-            pickle.dump(mixed,pkl)
+        with open('mixedHclusters.json','w') as pkl:
+            json.dump(mixed,pkl)
         return clust_gen4
     
     def get_N(self):
@@ -300,8 +300,8 @@ class ClusterMetadata(MetadataTable):
                             if ex is not None:
                                 clust_gen6[key]=set()
                                 clust_gen6[key].add(ex.group())
-        with open('mixedNclusters.pkl','wb') as pkl:
-            pickle.dump(mixed,pkl)
+        with open('mixedNclusters.json','w') as pkl:
+            json.dump(mixed,pkl)
         return clust_gen6
     def query_clust(self,field:str,query:list):
         '''

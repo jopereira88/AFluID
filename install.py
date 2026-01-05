@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from flu_utils import metadata_dict,parse_clstr
 from collections import Counter
-import pickle
+import json
 
 def cluster_charact(metadata,metadata_p,clstr,cluster_p,cluster_pkl_name,cluster_meta_name):
     meta=metadata_dict(os.path.join(metadata_p,metadata),[9,10,12,11],sep=';')
@@ -33,8 +33,8 @@ def cluster_charact(metadata,metadata_p,clstr,cluster_p,cluster_pkl_name,cluster
     for cl in cluster_table:
         cluster_table[cl].append(cluster_reps[cl])
     #saving as binary object and cluster metadata table
-    with open(os.path.join(cluster_p,cluster_pkl_name),'wb') as save:
-        pickle.dump(cluster_table,save)
+    with open(os.path.join(cluster_p,f"{cluster_pkl_name}.json"),'w') as save:
+        json.dump(cluster_table,save)
     with open(os.path.join(cluster_p,cluster_meta_name),'w') as file:
         file.write(f'Cluster\tRepresentative\tGenotypes\tSegments\tHosts\tCountries\n')
         for elem in cluster_table:
@@ -88,7 +88,7 @@ if __name__ == '__main__':
     print('Creating cluster metadata...')
     if not os.path.exists(os.path.join(config["Paths"]["cluster_database"],config["Filenames"]["cluster_metadata"])):
         cluster_charact(metadata,config['Paths']['metadata'],config['Filenames']['cluster_clstr'],\
-            config['Paths']['cluster_database'],config['Filenames']['cluster_pkl'].replace('.pkl',''),config['Filenames']['cluster_metadata'])
+            config['Paths']['cluster_database'],config['Filenames']['cluster_pkl'].replace('.json','').replace('.pkl',''),config['Filenames']['cluster_metadata'])
     #creating representative blast database
     print('Creating representative blast database...')
     if not os.path.exists(os.path.join(config["Paths"]["blast_database"], config["Filenames"]["cluster"])):    

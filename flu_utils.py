@@ -2,7 +2,7 @@
 import re
 import subprocess
 from Bio import SeqIO
-import pickle
+import json
 import random
 import os
 import shutil
@@ -293,22 +293,22 @@ def metadata_dict(filepath,col_list,sep=','):
 
     return dict
 
-def pkl_save(object,filename):
-    """Saves an object into a pickle binary
+def json_save(object,filename):
+    """Saves an object into a json file
     Accepts: object(any) - Python object to store
-    filename(str) - Path to the output filename w/o .pkl extension
-    Outputs: .pkl file"""
+    filename(str) - Path to the output filename w/o .json extension
+    Outputs: .json file"""
     
-    with open(f'{filename}.pkl','wb') as save:
-        pickle.dump(object,save)
+    with open(f'{filename}.json','w') as save:
+        json.dump(object,save)
     
-def pkl_load(filename):
-    """Loads an object from a pickle binary
-    Accepts: filename(str) - Path to the output filename (MUST INCLUDE .pkl)
+def json_load(filename):
+    """Loads an object from a json file
+    Accepts: filename(str) - Path to the output filename (MUST INCLUDE .json)
     Outputs: python object"""
     
-    with open(filename,'rb') as bin:
-        object=pickle.load(bin)
+    with open(filename,'r') as bin:
+        object=json.load(bin)
     
     return object
 

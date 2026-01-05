@@ -11,7 +11,7 @@ import glob
 import re
 import numpy as np
 from collections import defaultdict
-from flu_utils import seq_get,dict_to_fasta,headers_from_mult_fas,parse_clstr,pkl_load,\
+from flu_utils import seq_get,dict_to_fasta,headers_from_mult_fas,parse_clstr,json_load,\
     seq_filter_get,mine_genotype_H,mine_genotype_N,convert_to_prop, mine_single_HA,mine_single_NA
 from metadata_utils import ClusterReportTable, ClusterMetadata, SequenceMetadata
 from structures import flagdict, taxa_dict, muts_loci_meaning , int_to_iupac, muts_interest,seg_lens
@@ -960,7 +960,7 @@ def main(flagdict=flagdict):
                 os.remove(file)
 
     ### LOAD PARAMETERS
-    dict_cluster=pkl_load(os.path.join(clusters_p,config["Filenames"]["cluster_pkl"]))
+    dict_cluster=json_load(os.path.join(clusters_p,config["Filenames"]["cluster_pkl"]))
     
     ###PIPELINE STEPS
    

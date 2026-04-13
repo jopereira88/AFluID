@@ -1,5 +1,6 @@
 from collections import defaultdict
 import ast
+from unittest import result
 from structures import geo_dict, taxa_dict, muts_interest, seg_lens, muts_loci_meaning
 import pandas as pd
 import os
@@ -23,7 +24,10 @@ def search_tax_level(term, taxa_dict):
 
 def rollup_taxa(term, taxa_dict, level='Genus'):
     level_tax={'SPECIES':0, 'GENUS':1, 'SUBFAMILY':2, 'FAMILY':3, 'DIVISION':4, 'ORDER':5, 'CLASS':6}
-    t_lev,key=search_tax_level(term, taxa_dict)
+    if 'sp.' in term or 'spp.' in term:
+        term=term.replace('sp.','').replace('spp.','').strip()
+    result = search_tax_level(term, taxa_dict)
+    t_lev, key = result
     if t_lev.upper() == level.upper():
         return taxa_dict[key][level_tax[level.upper()]]
     elif level_tax[t_lev.upper()] < level_tax[level.upper()]:

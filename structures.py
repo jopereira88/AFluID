@@ -402,7 +402,7 @@ taxa_dict={'Human': ['Homo sapiens','Homo','Homininae','Hominidae','Hominoidea',
  'Old world flycatchers (genus)': ['X','Muscicapa','Muscicapinae','Muscicapidae','Eupasseres','Passeriformes','Aves'],
  'Black-winged Stilt': ['Himantopus himantopus','Himantopus','Recurvirostrinae','Recurvirostridae','Charadrii','Charadriiformes','Aves'],
  'Silver -headed Gull': ['Chroicocephalus cirrocephalus','Chroicocephalus','Larinae','Laridae','Lari','Charadriiformes','Aves'],
- 'Anser anser domesticus': ['Anser anser domesticus','Anser','Anserinae','Anatidae','Anseriphormae','Anseriformes','Aves'],
+ 'Domestic goose': ['Anser anser domesticus','Anser','Anserinae','Anatidae','Anseriphormae','Anseriformes','Aves'],
  "Von Schrenck's bittern": ['Ixobrychus eurhythmus','Ixobrychus','Ardeinae','Ardeidae','Ardei','Pelecaniformes','Aves'],
  'Black-necked Crane': ['Grus nigricollis','Grus','Gruinae','Gruidae','Gruoidea','Gruiformes','Aves'],
  'Ural Owl': ['Strix uralensis','Strix','Striginae','Strigidae','X','Strigiformes','Aves'],
@@ -439,8 +439,9 @@ taxa_dict={'Human': ['Homo sapiens','Homo','Homininae','Hominidae','Hominoidea',
  'Mammals (class)': ['X', 'X', 'X', 'X', 'X', 'X', 'Mammalia'],
  'Felids (family)': ['X','X','X','Felidae','Feliformia','Carnivora','Mammalia'],
  'Partridges (subfamily)': ['X','X','Perdicinae','Phasianidae','Phasianoidea','Galliformes','Aves'],
- 'Swifts (subfamily)': ['X','X','Apodinae','Apodidae','X','Apodiformes','Aves']}
-geo_dict=country_to_region_continent = {
+ 'Swifts (subfamily)': ['X','X','Apodinae','Apodidae','X','Apodiformes','Aves'],
+ 'Geese':['X','Anser','Anserinae','Anatidae','Anseriphormae','Anseriformes','Aves ']}
+country_to_region_continent = {
     'USA': ('Northern America', 'North America'),'China': ('Eastern Asia', 'Asia'),'Korea': ('Eastern Asia', 'Asia'),'South Korea': ('Eastern Asia', 'Asia'),
     'Hong Kong': ('Eastern Asia', 'Asia'),'Bangladesh': ('Southern Asia', 'Asia'),'Senegal': ('Western Africa', 'Africa'),'Mexico': ('Central America', 'North America'),
     'Chile': ('South America', 'South America'),'Bolivia': ('South America', 'South America'),'Nigeria': ('Western Africa', 'Africa'),'Germany': ('Western Europe', 'Europe'),
@@ -534,3 +535,7 @@ muts_loci_meaning={'156A':('HA:156A','Increased virus binding to α2,6, increase
 
 seg_lens={'PB2_min':2226, 'PB1_min':2211, 'PA_min':2294, 'HA_min':1640, 'NP_min':1431, 'NA_min':1364, 'MP_min':952, 'NS_min':798, 
           'PB2_max':2370, 'PB1_max':2379, 'PA_max':2606, 'HA_max':1804, 'NP_max':1607, 'NA_max':1488, 'MP_max':1032, 'NS_max':906}
+seg_thress_A={'PB2_min':2226, 'PB1_min':2211, 'PA_min':2065, 'HA_min':1640, 'NP_min':1431, 'NA_min':1364, 'MP_min':952, 'NS_min':798, 
+          'PB2_max':2370, 'PB1_max':2379, 'PA_max':2294, 'HA_max':1804, 'NP_max':1607, 'NA_max':1488, 'MP_max':1032, 'NS_max':906}
+segment_to_number_iav={'PB2':1, 'PB1':2, 'PA':3, 'HA':4, 'NP':5, 'NA':6, 'MP':7, 'NS':8}
+ambiguous_nucleotides={'R':'AG','Y':'CT','S':'GC','W':'AT','K':'GT','M':'AC','B':'CGT','D':'AGT','H':'ACT','V':'ACG','N':'N'}

@@ -441,7 +441,7 @@ taxa_dict={'Human': ['Homo sapiens','Homo','Homininae','Hominidae','Hominoidea',
  'Partridges (subfamily)': ['X','X','Perdicinae','Phasianidae','Phasianoidea','Galliformes','Aves'],
  'Swifts (subfamily)': ['X','X','Apodinae','Apodidae','X','Apodiformes','Aves'],
  'Geese':['X','Anser','Anserinae','Anatidae','Anseriphormae','Anseriformes','Aves ']}
-country_to_region_continent = {
+geo_dict = {
     'USA': ('Northern America', 'North America'),'China': ('Eastern Asia', 'Asia'),'Korea': ('Eastern Asia', 'Asia'),'South Korea': ('Eastern Asia', 'Asia'),
     'Hong Kong': ('Eastern Asia', 'Asia'),'Bangladesh': ('Southern Asia', 'Asia'),'Senegal': ('Western Africa', 'Africa'),'Mexico': ('Central America', 'North America'),
     'Chile': ('South America', 'South America'),'Bolivia': ('South America', 'South America'),'Nigeria': ('Western Africa', 'Africa'),'Germany': ('Western Europe', 'Europe'),

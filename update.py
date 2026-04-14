@@ -11,7 +11,7 @@ from collections import Counter
 import configparser
 import argparse
 from structures import flagdict,ambiguous_nucleotides
-from copy import deepcopy
+from copy import deepcopy, copy
 import os
 import sys
 import glob
@@ -67,7 +67,7 @@ def normalise_segments(dataframe):
     dataframe['Segment']=dataframe['Segment'].astype(str)
     segment_to_number_iav={'PB2':'1', 'PB1':'2', 'PA':'3', 'HA':'4', 'NP':'5', 'NA':'6', 'MP':'7', 'NS':'8'}
     dataframe['Segment']=dataframe['Segment'].apply(lambda x: segment_to_number_iav[x] if x in segment_to_number_iav else x)
-    dataframe['Segment']=dataframe['Segment'].astype(str)
+    dataframe['Segment']=dataframe['Segment'].astype(int)
     
     return dataframe
 
@@ -80,6 +80,17 @@ def remove_v_genotype(dataframe):
     Returns: dataframe
     '''
     dataframe['Genotype']=dataframe['Genotype'].str.replace('v', '', regex=False)
+    return dataframe
+
+def normalise_len_to_int(dataframe):
+    '''
+    Converts Length values to int
+    
+    :param dataframe: A NCBI virus metadata dataframe (pandas DataFrame)
+
+    Returns: dataframe
+    '''
+    dataframe['Length']=dataframe['Length'].astype(int)
     return dataframe
 
 
@@ -201,14 +212,13 @@ def clean_assemblies(dataframe,number_of_segs):
     
     Returns: Dataframe
     '''
-    assembly_removal_mask=dataframe['Assembly'].value_counts()!=number_of_segs
-    assembly_removal_mask=dataframe[assembly_removal_mask].index.tolist()
-    dataframe=dataframe[~dataframe['Assembly'].isin(assembly_removal_mask)]
-    if dataframe['Segment'].value_counts().nunique()==1:
-        return dataframe
-    else:
-        print("Error: could not clean assembiles")
-        raise SystemExit
+    assembly_counts = dataframe["Assembly"].value_counts()
+    assemblies_to_remove = assembly_counts[assembly_counts < number_of_segs].index
+
+    assembly_removal_mask = dataframe["Assembly"].isin(assemblies_to_remove)
+
+    cleaned_df = dataframe.loc[~assembly_removal_mask].copy()
+    return cleaned_df
 
 def get_offending_accessions_genotype(df, assembly_col="Assembly", accession_col="Accession", genotype_col="Genotype"):
     """
@@ -443,10 +453,10 @@ def remove_duplicates_list(in_list):
 
 def args():
     parser=argparse.ArgumentParser(prog='AFluID update routine',description='AFluID: Automated Influenza Identification Pipeline')
-    parser=parser.add_argument('-c','--config',type=str,help='Configuration file path',default='config.ini',required=False)
-    parser=parser.add_argument('-ff','--fastafile',type=str,help='Update fasta file name - path in config',required=True)
-    parser=parser.add_argument('-mf','--metadatafile',type=str,help='Update metadata file name - path in config',required=True)
-    parser=parser.add_argument('-rm','--remove_previous',type=str,help='Remove previous updates on update',choices=('on','off'),default='off',required=False)
+    parser.add_argument('-c','--config',type=str,help='Configuration file path',default='config.ini',required=False)
+    parser.add_argument('-ff','--fastafile',type=str,help='Update fasta file name - path in config',required=True)
+    parser.add_argument('-mf','--metadatafile',type=str,help='Update metadata file name - path in config',required=True)
+    parser.add_argument('-rm','--remove_previous',type=str,help='Remove previous updates on update',choices=('on','off'),default='off',required=False)
     args=parser.parse_args()
     return args
     
@@ -514,18 +524,22 @@ def main():
         for file in glob.glob(os.path.join(runs_p, "*")):
             os.remove(file)
     #### STEP 1 - CLEANING UPDATE METADATA
-    new_metadata=pd.read_csv(os.path.join(update_p,new_metadata_filename),index_col=False)
+    print('Cleaning Metadata')
+    new_metadata=pd.read_csv(os.path.join(update_p,new_metadata_filename),index_col=False,low_memory=False)
     new_metadata=drop_na_metadata(new_metadata)
     new_metadata=normalise_segments(new_metadata)
     new_metadata=remove_v_genotype(new_metadata)
+    new_metadata=normalise_len_to_int(new_metadata)
 
     #### STEP 2 - FILTERING BY SIZE AND GENOTYPE
+    print('Filtering accessisons')
     accessions_to_remove=get_offending_accessions_genotype(new_metadata) + get_size_outliers(new_metadata)
     accessions_to_remove=remove_duplicates_list(accessions_to_remove)
     new_metadata=new_metadata[~new_metadata['Accession'].isin(accessions_to_remove)]
     new_metadata=clean_assemblies(new_metadata,8)
 
     #### STEP 3 - FILTERING BY AMBIGUOUS NUCLEOTIDE CONTENT AND FAST OUTPUT
+    print('Checking sequence quality')
     update_sequences=seq_get(os.path.join(update_p, fasta_filename))
     access_header={header.split('|')[0].replace('>','').replace(' ','') : header for header in update_sequences}
     ambiguous=filter_by_ambiguous_nucleotides(update_sequences,ambiguous_nucleotides)
@@ -533,10 +547,12 @@ def main():
     new_metadata=new_metadata[~new_metadata['Accession'].isin(ambiguous)]
     new_metadata=clean_assemblies(new_metadata,8)
     new_seqs={access_header[i]:update_sequences[access_header[i]] for i in new_metadata['Accession'].to_list() if i in access_header}
-    fasta_filename=fasta_filename.replace('.fasta','_new.fasta')
+    fasta_filename=fasta_filename.replace('.fasta','_new')
     dict_to_fasta(new_seqs,os.path.join(update_p,fasta_filename))
 
     #### STEP 4 - AFLUID RUN
+    print("Starting AFluID")
+    fasta_filename=fasta_filename+'.fasta'
     dict_cluster=json_load(os.path.join(clusters_p,config["Filenames"]["cluster_pkl"]))
     mappings=fasta_preprocess(fasta_filename,update_p,runs_p,min,max,flags,verbose=True)
     file=fasta_filename.replace('.fasta','')
@@ -562,6 +578,7 @@ def main():
         report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags)
     
     #### STEP 5 - SEGMENT AND GENOTYPE COMPARISON
+    print("Cross-referencing with metadata")
     id_report=pd.read_table(os.path.join(reports_p,f"{file}_ID_Report.txt"),index_col=False)
     accessions_to_remove=compare_non_determining(new_metadata,id_report)+compare_determining(new_metadata,id_report)
     accessions_to_remove=remove_duplicates_list(accessions_to_remove)
@@ -571,8 +588,9 @@ def main():
 
     #### STEP 6 - CONCATENATING FASTAS AND METADATA FILES
     ##### STEP 6.1 - BACKUP
+    print("Creating backup and updating databases")
     backup_path='update_backup.tar.gz'
-    source_files=[old_fasta,os.path.join(metadata_p,main_metadata)]
+    source_files=[old_fasta,os.path.join(metadata_p,main_metadata),config_file]
     with tarfile.open(backup_path, "w:gz") as tar:
         for file_path in source_files:
             tar.add(file_path, arcname=os.path.basename(file_path))
@@ -592,6 +610,7 @@ def main():
 
     #### STEP 7 - INSTALLATION
     ##### STEP 7.1 - UPDATING FILENAMES
+    print("Regenerating databases")
     config_updates = {
         "Filenames": {
             "l_blast": f"sequencesDnaInf_{date}",

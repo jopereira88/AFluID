@@ -53,7 +53,7 @@ if __name__ == '__main__':
     config.read(config_file)
     cwd=os.getcwd()
     #check if required paths exist
-    for path in ['samples', 'runs', 'references', 'reports', 'logs', 'blast_database', 'cluster_database', 'metadata']:
+    for path in ['samples', 'runs', 'references', 'reports', 'logs', 'blast_database', 'cluster_database', 'metadata','update']:
         full_path = os.path.abspath(os.path.join(cwd, config['Paths'][path]))
         os.makedirs(full_path, exist_ok=True)
         # Update config object in memory so subsequent calls use the full path

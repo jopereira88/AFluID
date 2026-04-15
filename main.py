@@ -228,63 +228,93 @@ def cluster_compile(s_dict:str, cl_dict:dict, cl_assign:str, reports_path:str) -
                 report.write(f'{sample}\t{compiler[sample][0]}\t{compiler[sample][1]}\n')
     print(f"Compiled report generated in {outpath}")
 
-def cluster_miner(reports_p:str,filename:str,samples_p:str,runs_p:str,flags:dict) -> dict:
-    '''
-    Mine cluster report for unassingned samples and 
-    outputs them to BLAST
-    Parameters:
-    reports_p (str): The path to the reports directory.
-    filename (str): The name of the sample file.
-    samples_p (str): The path to the samples directory.
-    runs_p (str): The path to the runs directory.
-    Returns:
-    dict: A dictionary mapping cluster identifiers to assigned sequences.
-    Outputs a .fasta file for blast analysis.
-    '''
-    #mining the cluster report for unassigned samples
-    clust_rep=ClusterReportTable(os.path.join(reports_p,f'{filename}_clust_report.txt'))
-    clust_rep.convert_to_prop('genotypes')
-    clust_rep.convert_to_prop('hosts')
-    clust_rep.convert_to_prop('countries')
-    hs=clust_rep.extract_h()
-    ns=clust_rep.extract_n()
-    to_blast=[]
-    for key in clust_rep.data:
-        if clust_rep.data[key][0]=='NA': #completely unassigned
-            to_blast.append(key)
-        elif len(clust_rep.data[key][4]) > 1: #ambiguous in segment
-            to_blast.append(key)
-        elif clust_rep.data[key][4] == '4': #ambiguouis in subtype HA
-            if len(hs[key]) > 1:
-                to_blast.append(key)
-        elif clust_rep.data[key][4] =='6': #ambiguouis in subtype NA
-            if len(ns[key]) > 1:
-                to_blast.append(key)
-    to_report={}
+def cluster_miner(reports_p: str, filename: str, samples_p: str, runs_p: str, flags: dict) -> dict:
+    """
+    Mine cluster report for unassigned samples and output them to BLAST.
 
-    #creating a dictionary for the report
-    for key in clust_rep.data:
-        if key not in to_blast:
-            to_report[key]=[]
-            to_report[key].append(clust_rep.data[key][2].replace(' ',''))
-            to_report[key].append(
-                clust_rep.data[key][1].replace('                        >','>'))
-            to_report[key].append(clust_rep.data[key][0].replace('%',''))
-            to_report[key].append(clust_rep.data[key][4])
-            to_report[key].append(clust_rep.data[key][3])
-            to_report[key].append(clust_rep.data[key][5])
-            to_report[key].append(clust_rep.data[key][6])
-            to_report[key].append('CD-HIT')
-    
-    #swtting sequences to blast and updating flagsdict
-    if to_blast != []:
-        for i in to_blast:
-            flags['CD-HIT']['Unclustered Sequences'].append(i)
-        to_blast_dict=seq_filter_get(os.path.join(samples_p,f'format_{filename}.fasta'),to_blast)
-        dict_to_fasta(to_blast_dict,os.path.join(runs_p,f'{filename}_to_blast'))
-        flags['Master']['C_BLAST']=True
+    Parameters
+    ----------
+    reports_p : str
+        Path to the reports directory.
+    filename : str
+        Sample file base name.
+    samples_p : str
+        Path to the samples directory.
+    runs_p : str
+        Path to the runs directory.
+    flags : dict
+        Flags dictionary to update.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping sequence identifiers to the same 8 output fields
+        already used in the original function.
+    """
+    report_fp = os.path.join(reports_p, f"{filename}_clust_report.txt")
+    fasta_fp = os.path.join(samples_p, f"format_{filename}.fasta")
+    blast_fp = os.path.join(runs_p, f"{filename}_to_blast")
+
+    # Load report object
+    clust_rep = ClusterReportTable(report_fp)
+    clust_rep.convert_to_prop("genotypes")
+    clust_rep.convert_to_prop("hosts")
+    clust_rep.convert_to_prop("countries")
+    hs = clust_rep.extract_h()
+    ns = clust_rep.extract_n()
+
+    # Load tabular report
+    evaluate = pd.read_table(report_fp, index_col=False)
+
+    if "Sample_access" not in evaluate.columns or "Cluster" not in evaluate.columns:
+        raise ValueError("The cluster report must contain 'Sample_access' and 'Cluster' columns.")
+
+    # Safe conversion to plain Python list
+    to_blast = (
+        evaluate.loc[evaluate["Cluster"] == ">Unassigned", "Sample_access"]
+        .dropna()
+        .astype(str)
+        .tolist()
+    )
+    to_blast_set = set(to_blast)
+
+    to_report = {}
+
+    for key, row in clust_rep.data.items():
+        key_str = str(key)
+
+        # Skip unassigned sequences
+        if key_str in to_blast_set:
+            continue
+
+        # Protect against short/incomplete rows without changing output shape
+        safe_row = list(row) if row is not None else []
+        safe_row += [""] * max(0, 7 - len(safe_row))
+
+        to_report[key_str] = [
+            str(safe_row[2]).replace(" ", "") if safe_row[2] is not None else "",
+            str(safe_row[1]).replace("                        >", ">") if safe_row[1] is not None else "",
+            str(safe_row[0]).replace("%", "") if safe_row[0] is not None else "",
+            safe_row[4] if safe_row[4] is not None else "",
+            safe_row[3] if safe_row[3] is not None else "",
+            safe_row[5] if safe_row[5] is not None else "",
+            safe_row[6] if safe_row[6] is not None else "",
+            "CD-HIT"
+        ]
+
+    # Update flags and export FASTA for BLAST
+    flags.setdefault("CD-HIT", {})
+    flags["CD-HIT"].setdefault("Unclustered Sequences", [])
+    flags.setdefault("Master", {})
+
+    if to_blast:
+        flags["CD-HIT"]["Unclustered Sequences"].extend(to_blast)
+        to_blast_dict = seq_filter_get(fasta_fp, to_blast)
+        dict_to_fasta(to_blast_dict, blast_fp)
+        flags["Master"]["C_BLAST"] = True
     else:
-        flags['Master']['C_BLAST']=False
+        flags["Master"]["C_BLAST"] = False
+
     return to_report
 
 #### BLAST

@@ -440,7 +440,8 @@ taxa_dict={'Human': ['Homo sapiens','Homo','Homininae','Hominidae','Hominoidea',
  'Felids (family)': ['X','X','X','Felidae','Feliformia','Carnivora','Mammalia'],
  'Partridges (subfamily)': ['X','X','Perdicinae','Phasianidae','Phasianoidea','Galliformes','Aves'],
  'Swifts (subfamily)': ['X','X','Apodinae','Apodidae','X','Apodiformes','Aves'],
- 'Geese':['X','Anser','Anserinae','Anatidae','Anseriphormae','Anseriformes','Aves ']}
+ 'Geese':['X','Anser','Anserinae','Anatidae','Anseriphormae','Anseriformes','Aves '],
+ 'Unknown':['Unknown','Unknown','Unknown','Unknown','Unknown','Unknown','Unknown']}
 geo_dict = {
     'USA': ('Northern America', 'North America'),'China': ('Eastern Asia', 'Asia'),'Korea': ('Eastern Asia', 'Asia'),'South Korea': ('Eastern Asia', 'Asia'),
     'Hong Kong': ('Eastern Asia', 'Asia'),'Bangladesh': ('Southern Asia', 'Asia'),'Senegal': ('Western Africa', 'Africa'),'Mexico': ('Central America', 'North America'),

@@ -1,7 +1,6 @@
 # AFluID update script
 # Importing dependencies
 import pandas as pd
-import matplotlib.pyplot as plt
 from Bio import SeqIO, Entrez
 from structures import seg_thress_A
 import re
@@ -381,26 +380,52 @@ def compare_non_determining(metadata_dataframe, report_dataframe):
     :param report_dataframe: AFluID ID report dataframe.
 
     Returns: List of inconsistent accessions.
-
     '''
-    pos = report_dataframe.columns.get_loc('SAMPLE_NAME')+1
-    report_dataframe.insert(pos, 'Accession', report_dataframe['SAMPLE_NAME'].apply(lambda x: x.split('|')[0].replace(' ', '').replace('>', '')))
-    report_dataframe['SEGMENT']=report_dataframe['SEGMENT'].apply(safe_str_to_dict)
-    report_dataframe['GENOTYPE']=report_dataframe['GENOTYPE'].apply(safe_str_to_dict)
-    report_dataframe['SEGMENT']=report_dataframe['SEGMENT'].apply(lambda x: int(list(x.keys())[0]) if isinstance(x, dict) and len(x) == 1 else int(x))
-    report_dataframe['GENOTYPE']=report_dataframe['GENOTYPE'].apply(lambda x: list(x.keys()) if isinstance(x, dict) else x)
-    non_determining=report_dataframe[(report_dataframe['SEGMENT']!=4) & (report_dataframe['SEGMENT']!=6)]
-    non_determining=non_determining.merge(metadata_dataframe, on='Accession', how='inner')
+    report_dataframe = report_dataframe.copy()
 
-    offending_keys = []
+    report_dataframe['Accession'] = report_dataframe['SAMPLE_NAME'].apply(
+        lambda x: str(x).split('|')[0].replace(' ', '').replace('>', '')
+    )
+
+    report_dataframe['SEGMENT'] = report_dataframe['SEGMENT'].apply(safe_str_to_dict)
+    report_dataframe['GENOTYPE'] = report_dataframe['GENOTYPE'].apply(safe_str_to_dict)
+
+    def parse_segment(x):
+        if isinstance(x, dict) and len(x) == 1:
+            return int(list(x.keys())[0])
+        return int(x)
+
+    def parse_genotype(x):
+        if isinstance(x, dict):
+            return [str(k) for k in x.keys()]
+        elif isinstance(x, list):
+            return [str(v) for v in x]
+        elif pd.isna(x):
+            return []
+        else:
+            return [str(x)]
+
+    report_dataframe['SEGMENT'] = report_dataframe['SEGMENT'].apply(parse_segment)
+    report_dataframe['GENOTYPE'] = report_dataframe['GENOTYPE'].apply(parse_genotype)
+
+    non_determining = report_dataframe[
+        (report_dataframe['SEGMENT'] != 4) & (report_dataframe['SEGMENT'] != 6)
+    ].copy()
+
+    non_determining = non_determining.merge(metadata_dataframe, on='Accession', how='inner')
+
+    offending_keys = set()
+
     for key, v1, v2 in zip(non_determining["Accession"], non_determining["SEGMENT"], non_determining["Segment"]):
         if int(v1) != int(v2):
-            offending_keys.append(key)
+            offending_keys.add(key)
+
     for key, v1, v2 in zip(non_determining["Accession"], non_determining["GENOTYPE"], non_determining["Genotype"]):
-        if v2 not in v2:
-            offending_keys.append(key)
-    
-    return offending_keys
+        if str(v2) not in [str(g) for g in v1]:
+            offending_keys.add(key)
+
+    return list(offending_keys)
+
 
 def compare_determining(metadata_dataframe, report_dataframe):
     '''
@@ -418,28 +443,60 @@ def compare_determining(metadata_dataframe, report_dataframe):
     :param report_dataframe: AFluID ID report dataframe.
 
     Returns: List of inconsistent accessions.
-
     '''
-    pos = report_dataframe.columns.get_loc('SAMPLE_NAME')+1
-    report_dataframe.insert(pos, 'Accession', report_dataframe['SAMPLE_NAME'].apply(lambda x: x.split('|')[0].replace(' ', '').replace('>', '')))
-    report_dataframe['SEGMENT']=report_dataframe['SEGMENT'].apply(safe_str_to_dict)
-    report_dataframe['GENOTYPE']=report_dataframe['GENOTYPE'].apply(safe_str_to_dict)
-    report_dataframe['SEGMENT']=report_dataframe['SEGMENT'].apply(lambda x: int(list(x.keys())[0]) if isinstance(x, dict) and len(x) == 1 else int(x))
-    report_dataframe['GENOTYPE']=report_dataframe['GENOTYPE'].apply(lambda x: list(x.keys()) if isinstance(x, dict) else x)
-    determining=report_dataframe[(report_dataframe['SEGMENT']==4)|(report_dataframe['SEGMENT']==6)]
-    determining=determining.merge(metadata_dataframe, on='Accession', how='inner')
-    determining.loc[:,"GEN_EX"] = [expose_determining_component(seg,geno) for seg, geno in zip(determining["SEGMENT"],determining["GENOTYPE"])]
-    determining.loc[:,"Gen_ex"] = [expose_determining_component(seg,geno) for seg, geno in zip(determining["Segment"],determining["Genotype"])]
-    
-    offending_keys=[]
+    report_dataframe = report_dataframe.copy()
+
+    report_dataframe['Accession'] = report_dataframe['SAMPLE_NAME'].apply(
+        lambda x: str(x).split('|')[0].replace(' ', '').replace('>', '')
+    )
+
+    report_dataframe['SEGMENT'] = report_dataframe['SEGMENT'].apply(safe_str_to_dict)
+    report_dataframe['GENOTYPE'] = report_dataframe['GENOTYPE'].apply(safe_str_to_dict)
+
+    def parse_segment(x):
+        if isinstance(x, dict) and len(x) == 1:
+            return int(list(x.keys())[0])
+        return int(x)
+
+    def parse_genotype(x):
+        if isinstance(x, dict):
+            return [str(k) for k in x.keys()]
+        elif isinstance(x, list):
+            return [str(v) for v in x]
+        elif pd.isna(x):
+            return []
+        else:
+            return [str(x)]
+
+    report_dataframe['SEGMENT'] = report_dataframe['SEGMENT'].apply(parse_segment)
+    report_dataframe['GENOTYPE'] = report_dataframe['GENOTYPE'].apply(parse_genotype)
+
+    determining = report_dataframe[
+        (report_dataframe['SEGMENT'] == 4) | (report_dataframe['SEGMENT'] == 6)
+    ].copy()
+
+    determining = determining.merge(metadata_dataframe, on='Accession', how='inner')
+
+    determining.loc[:, "GEN_EX"] = [
+        expose_determining_component(seg, geno)
+        for seg, geno in zip(determining["SEGMENT"], determining["GENOTYPE"])
+    ]
+    determining.loc[:, "Gen_ex"] = [
+        expose_determining_component(seg, geno)
+        for seg, geno in zip(determining["Segment"], determining["Genotype"])
+    ]
+
+    offending_keys = set()
+
     for key, v1, v2 in zip(determining["Accession"], determining["SEGMENT"], determining["Segment"]):
         if int(v1) != int(v2):
-            offending_keys.append(key)
+            offending_keys.add(key)
+
     for key, v1, v2 in zip(determining["Accession"], determining["Gen_ex"], determining["GEN_EX"]):
         if str(v1) != str(v2):
-            offending_keys.append(key)
-    
-    return offending_keys
+            offending_keys.add(key)
+
+    return list(offending_keys)
 
 def remove_duplicates_list(in_list):
     '''
@@ -469,7 +526,6 @@ def main():
     config=configparser.ConfigParser()
     config.read(config_file)
     flags=deepcopy(flagdict)
-    main_metadata=config["Filenames"]["metadata"]
     fasta_filename=arg.fastafile
     old_fasta=f'{config["Filenames"]["l_blast"]}.fasta'
     new_metadata_filename=arg.metadatafile
@@ -487,6 +543,7 @@ def main():
     threads, num_seqs =int(config['blast']['num_threads']), int(config['blast']['max_target_seqs'])
     max,min=int(config["Sequence_Size"]["max"]), int(config["Sequence_Size"]["min"])
     date=datetime.now().strftime("%Y%m%d")
+    main_metadata=pd.read_csv(os.path.join(metadata_p,config["Filenames"]["metadata"]), sep=';', index_col=False)
     ##### CHECKING PATHS
     if os.path.exists(update_p):
         if os.path.exists(runs_p):
@@ -549,33 +606,40 @@ def main():
     new_seqs={access_header[i]:update_sequences[access_header[i]] for i in new_metadata['Accession'].to_list() if i in access_header}
     fasta_filename=fasta_filename.replace('.fasta','_new')
     dict_to_fasta(new_seqs,os.path.join(update_p,fasta_filename))
-
-    #### STEP 4 - AFLUID RUN
-    print("Starting AFluID")
-    fasta_filename=fasta_filename+'.fasta'
-    dict_cluster=json_load(os.path.join(clusters_p,config["Filenames"]["cluster_pkl"]))
-    mappings=fasta_preprocess(fasta_filename,update_p,runs_p,min,max,flags,verbose=True)
     file=fasta_filename.replace('.fasta','')
-    cd_hit_est_2d(os.path.join(runs_p,f'format_{fasta_filename}'),os.path.join(clusters_p,config["Filenames"]["cluster"]),\
+    #### STEP 4 - AFLUID RUN
+    if not os.path.exists(os.path.join(reports_p,f"{file}_ID_Report.txt")):
+        print("Starting AFluID")
+        fasta_filename=fasta_filename+'.fasta'
+        dict_cluster=json_load(os.path.join(clusters_p,config["Filenames"]["cluster_pkl"]))
+        print("Remapping seqs")
+        mappings=fasta_preprocess(fasta_filename,update_p,runs_p,min,max,flags,verbose=True)
+
+        #snapshot 1 for the longest procecesses
+        if not os.path.exists(os.path.join(runs_p,f'format_{file}')):
+            print("Running cd-hit")
+            cd_hit_est_2d(os.path.join(runs_p,f'format_{fasta_filename}'),os.path.join(clusters_p,config["Filenames"]["cluster"]),\
                   os.path.join(runs_p,f'format_{file}'),float(config["CD-HIT"]["identity"]),logs_p,verbose=True)
-
-    assignments=cluster_assign(f'format_{file}.clstr',os.path.join(runs_p,f'format_{fasta_filename}'),runs_p)
-    cluster_compile(assignments,dict_cluster,os.path.join(runs_p,f'format_{file}.assign'),reports_p)
-    cluster_report=cluster_miner(reports_p,file,runs_p,runs_p,flags)
-    threads=config['blast']['num_threads']
-    num_seqs=config['blast']['max_target_seqs']
-
-    if flags['Master']['C_BLAST']:
-        blast_cluster=bclust(clusters_p,config["Filenames"]["cluster_metadata"],runs_p,blasts_p,config["Filenames"]["cluster"],runs_p,\
+        print('Creating assignment object')
+        assignments=cluster_assign(f'format_{file}.clstr',os.path.join(runs_p,f'format_{fasta_filename}'),runs_p)
+        print("Creating cluster report")
+        cluster_compile(assignments,dict_cluster,os.path.join(runs_p,f'format_{file}.assign'),reports_p)
+        print("Creating Blast Fasta")
+        cluster_report=cluster_miner(reports_p,file,runs_p,runs_p,flags)
+        threads=config['blast']['num_threads']
+        num_seqs=config['blast']['max_target_seqs']
+        print("Starting Blast")
+        if flags['Master']['C_BLAST']:
+            blast_cluster=bclust(clusters_p,config["Filenames"]["cluster_metadata"],runs_p,blasts_p,config["Filenames"]["cluster"],runs_p,\
                              fasta_filename,flags,num_threads=int(threads),max_tar_seq=int(num_seqs),fasta=f"{fasta_filename.replace('.fasta','')}_to_blast.fasta")
-        if flags['Master']['L_BLAST']:
-            blast_report=reblast(metadata_p,main_metadata,runs_p,blasts_p,config["Filenames"]["l_blast"],runs_p,\
+            if flags['Master']['L_BLAST']:
+                blast_report=reblast(metadata_p,main_metadata,runs_p,blasts_p,config["Filenames"]["l_blast"],runs_p,\
                                  fasta_filename,threads=int(threads),max_tar_seq=int(num_seqs),fasta=f"{fasta_filename.replace('.fasta','')}_to_reblast.fasta")
-            report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags,bclust_dict=blast_cluster,blast_dict=blast_report)
+                report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags,bclust_dict=blast_cluster,blast_dict=blast_report)
+            else:
+                report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags,bclust_dict=blast_cluster)
         else:
-            report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags,bclust_dict=blast_cluster)
-    else:
-        report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags)
+            report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags)
     
     #### STEP 5 - SEGMENT AND GENOTYPE COMPARISON
     print("Cross-referencing with metadata")
@@ -588,30 +652,30 @@ def main():
 
     #### STEP 6 - CONCATENATING FASTAS AND METADATA FILES
     ##### STEP 6.1 - BACKUP
-    print("Creating backup and updating databases")
-    backup_path='update_backup.tar.gz'
-    source_files=[old_fasta,os.path.join(metadata_p,main_metadata),config_file]
-    with tarfile.open(backup_path, "w:gz") as tar:
-        for file_path in source_files:
-            tar.add(file_path, arcname=os.path.basename(file_path))
+    if os.listdir(metadata_p) and not os.path.exists(f'flu_metadata_{date}_.csv'):
+        print("Creating backup and updating databases")
+        backup_path='update_backup.tar.gz'
+        source_files=[old_fasta,os.path.join(metadata_p,config["Filenames"]["metadata"]),config_file]
+        with tarfile.open(backup_path, "w:gz") as tar:
+            for file_path in source_files:
+                tar.add(file_path, arcname=os.path.basename(file_path))
     ##### STEP 6.2 - CONCATENATION
-    with open(old_fasta, 'a') as f:
-        for header, seq in new_seqs.items():
-            f.write(f"{header}\n{seq}\n")
-    os.rename(old_fasta,f'sequencesDnaInf_{date}'+'.fasta')
-    rename_map={col:col.upper() for col in new_metadata.columns}
-    new_metadata=new_metadata.rename(columns=rename_map)
-    for col in main_metadata.columns:
-        if col not in new_metadata.columns:
-            new_metadata[col] = pd.NA
-    new_metadata=new_metadata[main_metadata.columns]
-    metadata_concat=pd.concat([main_metadata,new_metadata], ignore_index=True)
-    metadata_concat.to_csv(f"flu_metadata_{date}_.csv",index=False,sep=';')
-
+        with open(old_fasta, 'a') as f:
+            for header, seq in new_seqs.items():
+                f.write(f"{header}\n{seq}\n")
+        rename_map={col:col.upper() for col in new_metadata.columns}
+        new_metadata=new_metadata.rename(columns=rename_map)
+        for col in main_metadata.columns:
+            if col not in new_metadata.columns:
+                new_metadata[col] = pd.NA
+        new_metadata=new_metadata[main_metadata.columns]
+        metadata_concat=pd.concat([main_metadata,new_metadata], ignore_index=True)
+        metadata_concat.to_csv(f"flu_metadata_{date}_.csv",index=False,sep=';')
+        os.rename(old_fasta,f'sequencesDnaInf_{date}'+'.fasta')
     #### STEP 7 - INSTALLATION
     ##### STEP 7.1 - UPDATING FILENAMES
-    print("Regenerating databases")
-    config_updates = {
+        print("Regenerating databases")
+        config_updates = {
         "Filenames": {
             "l_blast": f"sequencesDnaInf_{date}",
             "metadata": f"flu_metadata_{date}_.csv"
@@ -619,16 +683,17 @@ def main():
         "Versions": {
             "update_date": date
         }
-    }
-    for file in glob.glob(os.path.join(blasts_p, "*")):
-        os.remove(file)
-    for file in glob.glob(os.path.join(clusters_p, "*")):
-        os.remove(file)
-    for file in glob.glob(os.path.join(metadata_p, "*")):
-        os.remove(file)
-    update_ini_config(config_file, config_updates)
+        }
+        for file in glob.glob(os.path.join(blasts_p, "*")):
+            os.remove(file)
+        for file in glob.glob(os.path.join(clusters_p, "*")):
+            os.remove(file)
+        for file in glob.glob(os.path.join(metadata_p, "*")):
+            os.remove(file)
+        update_ini_config(config_file, config_updates)
+    
     ###### STEP 7.2 - RE-RUNNING INSTALL ROUTINE
-    os.system(f"python install.py -c {config_file}")
+    os.system(f"python3 install.py {config_file}")
 
 if __name__ == "__main__":
     main()

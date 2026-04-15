@@ -27,6 +27,9 @@ def rollup_taxa(term, taxa_dict, level='Genus'):
     if 'sp.' in term or 'spp.' in term:
         term=term.replace('sp.','').replace('spp.','').strip()
     result = search_tax_level(term, taxa_dict)
+    if result == 'Unknown':
+      result = ('Species', 'Unknown')
+    
     t_lev, key = result
     if t_lev.upper() == level.upper():
         return taxa_dict[key][level_tax[level.upper()]]

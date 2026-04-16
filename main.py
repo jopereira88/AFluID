@@ -14,7 +14,8 @@ from collections import defaultdict
 from flu_utils import seq_get,dict_to_fasta,headers_from_mult_fas,parse_clstr,json_load,\
     seq_filter_get,mine_genotype_H,mine_genotype_N,convert_to_prop, mine_single_HA,mine_single_NA
 from metadata_utils import ClusterReportTable, ClusterMetadata, SequenceMetadata
-from structures import flagdict, taxa_dict, muts_loci_meaning , int_to_iupac, muts_interest,seg_lens
+from structures import flagdict, taxa_dict, muts_loci_meaning , int_to_iupac, muts_interest,seg_lens, \
+    iav_segments, contig_single_min_floor_bp, contig_single_min_step_bp
 from final_report_utils import html_skeleton, generate_final_report
 from copy import deepcopy
 import pandas as pd
@@ -469,6 +470,118 @@ def report_compiler(clust_dict:dict,samples_p:str,filename:str,mappings_dict:dic
         flags['BLAST']['Sequences unassigned against local database'].extend(to_remote)
     #print(f'Report generated in {os.path.join(reports_p,filename.replace(".fasta",""))}_ID_Report.txt')
 
+#### REPORT PARSERS
+def _parse_segment_cell(x):
+    """Parse SEGMENT cell from ID_Report into int 1..8 (or None)."""
+    if pd.isna(x):
+        return None
+    s = str(x).strip()
+    if not s:
+        return None
+    try:
+        v = ast.literal_eval(s) if s.startswith('{') else s
+    except Exception:
+        v = s
+    if isinstance(v, dict) and v:
+        k = next(iter(v.keys()))
+        try:
+            return int(k)
+        except Exception:
+            return None
+    try:
+        return int(v)
+    except Exception:
+        return None
+
+
+def _parse_pident_cell(x):
+    """Parse %ID cell from ID_Report into float (or None)."""
+    if pd.isna(x):
+        return None
+    s = str(x).strip().replace('%', '')
+    if not s or s.upper() == 'NA':
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def compute_best_segments_iterative(id_report_fp: str, formatted_fasta_fp: str, mappings: dict, start_min_len: int,
+                                   step_bp: int = contig_single_min_step_bp,
+                                   floor_bp: int = contig_single_min_floor_bp) -> tuple:
+    """Select a single best contig per segment without overwriting.
+
+    Identification is assumed to have been run once on the full formatted FASTA.
+    We then iterate selection thresholds: start_min_len, start_min_len-step, ... until floor_bp.
+
+    Selection order: contig length desc, then %ID desc.
+    Fill-once: once a segment is filled, it is never replaced.
+
+    Returns:
+      (best_segments_internal, min_len_used)
+    """
+    best = {seg: None for seg in iav_segments}
+
+    if not os.path.exists(id_report_fp) or not os.path.exists(formatted_fasta_fp):
+        return best, int(floor_bp)
+
+    df = pd.read_table(id_report_fp, index_col=False)
+    if df is None or df.empty:
+        return best, int(floor_bp)
+
+    if 'SAMPLE_NAME' not in df.columns or 'SEGMENT' not in df.columns:
+        return best, int(floor_bp)
+
+    # Original header -> internal id (e.g. ">Seq_1")
+    remap = {orig: internal for internal, orig in mappings.items()}
+    seqs = seq_get(formatted_fasta_fp)
+
+    pident_col = '%ID' if '%ID' in df.columns else None
+    df['segment_num'] = df['SEGMENT'].apply(_parse_segment_cell)
+    df['pident'] = df[pident_col].apply(_parse_pident_cell) if pident_col else None
+    df['pident'] = df['pident'].fillna(-1.0).astype(float)
+    df['internal_id'] = df['SAMPLE_NAME'].astype(str).map(remap)
+
+    def _len_for_internal(sid):
+        if not isinstance(sid, str):
+            return 0
+        seq = seqs.get(sid)
+        return len(seq) if seq is not None else 0
+
+    df['contig_len'] = df['internal_id'].apply(_len_for_internal)
+
+    cand = df[(df['segment_num'].isin(range(1, 9))) & (df['contig_len'] > 0) & (df['internal_id'].notna())].copy()
+    if cand.empty:
+        return best, int(floor_bp)
+
+    cand = cand.sort_values(['contig_len', 'pident'], ascending=[False, False])
+    candidates = list(cand.itertuples(index=False))
+
+    start = int(start_min_len) if start_min_len is not None else int(floor_bp)
+    start = max(start, int(floor_bp))
+    step = max(1, int(step_bp))
+    floor = int(floor_bp)
+
+    thresholds = [start] if start == floor else list(range(start, floor, -step)) + [floor]
+    min_used = thresholds[-1]
+
+    for th in thresholds:
+        min_used = th
+        for row in candidates:
+            if int(row.contig_len) < th:
+                continue
+            seg_num = int(row.segment_num) if row.segment_num is not None else None
+            seg_name = int_to_iupac.get(seg_num)
+            if not seg_name or seg_name not in best:
+                continue
+            if best[seg_name] is None:
+                best[seg_name] = str(row.internal_id)
+        if all(best.values()):
+            break
+
+    return best, int(min_used)
+
 #### REDIRECTOR
 def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,reports_p:str,force_flumut:bool,force_genin:bool,force_getref:bool,mode,single_sample=True) -> None:
     '''
@@ -481,6 +594,15 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,repor
     '''
     #opening report and extracting data
     report=pd.read_table(os.path.join(reports_p,report), index_col=False)
+
+    # contig + single-sample: restrict downstream work to the selected best contigs
+    if mode == 'contig' and single_sample:
+        best = flags.get('Sample', {}).get('best_segments')
+        if isinstance(best, dict) and any(best.values()):
+            keep_internal = set(v for v in best.values() if v)
+            keep_original = set(mappings[iid] for iid in keep_internal if iid in mappings)
+            if keep_original and 'SAMPLE_NAME' in report.columns:
+                report = report[report['SAMPLE_NAME'].isin(keep_original)]
     report=report.dropna()
     report['SEGMENT']=report['SEGMENT'].apply(lambda x: ast.literal_eval(x))
     report['SEGMENT']=report['SEGMENT'].apply(lambda x: list(x.keys())[0] if type(x)==dict else int(x))
@@ -852,10 +974,9 @@ def run_genin2(flagsdict, samples_p, filename, reports_p):
     filename (str): The name of the FASTA file to be processed.
     reports_p (str): The path to the directory where the report files will be stored.
     Returns:
-    None: This function does not return a value. It executes a system command to run GenIn2 and generate output files."""
+    None: This function does not return a value. It executes a system command to run GenIn2 and generate output files.
+    """
     pass
-
-
 
 #### MAIN
 def parser():
@@ -938,6 +1059,7 @@ def main(flagdict=flagdict):
     print('Sample File:',filename)
     max=int(config["Sequence_Size"]["max"]) if not args.max_length else args.max_length
     min=int(config["Sequence_Size"]["min"]) if not args.min_length else args.min_length
+    selection_start_min=min
     print('Max sequence length:',max)
     print('Min sequence length:',min)
     threads=int(config['blast']['num_threads'])
@@ -993,8 +1115,14 @@ def main(flagdict=flagdict):
     dict_cluster=json_load(os.path.join(clusters_p,config["Filenames"]["cluster_pkl"]))
     
     ###PIPELINE STEPS
-   
-    mappings=fasta_preprocess(filename,samples_p,runs_p,min,max,flags,verbose=True)
+
+    # contig + single-sample: keep internal IDs stable by formatting once at the floor min,
+    # but iteratively relax selection thresholds when choosing best contigs per segment.
+    preprocess_min=min
+    if mode=='contig' and single:
+        preprocess_min=contig_single_min_floor_bp
+
+    mappings=fasta_preprocess(filename,samples_p,runs_p,preprocess_min,max,flags,verbose=True)
     file=filename.replace('.fasta','')
     cd_hit_est_2d(os.path.join(runs_p,f'format_{filename}'),os.path.join(clusters_p,config["Filenames"]["cluster"]),os.path.join(runs_p,f'format_{file}'),float(config["CD-HIT"]["identity"]),logs_p,verbose=True)
     
@@ -1023,6 +1151,22 @@ def main(flagdict=flagdict):
             flags['Master']['genin']=True
         if 'getref' in args.force:  
             flags['Master']['getref']=True
+
+    # contig + single-sample: choose a single best contig per segment (fill-once)
+    if mode=='contig' and single:
+        id_report_fp=os.path.join(reports_p,f"{file}_ID_Report.txt")
+        formatted_fasta_fp=os.path.join(runs_p,f"format_{filename}")
+        best_segments, min_used = compute_best_segments_iterative(
+            id_report_fp,
+            formatted_fasta_fp,
+            mappings,
+            selection_start_min,
+            step_bp=contig_single_min_step_bp,
+            floor_bp=contig_single_min_floor_bp,
+        )
+        flags['Sample']['best_segments']=best_segments
+        flags['Sample']['best_segments_min_len']=min_used
+
     redirector(f"{file}_ID_Report.txt",flags,filename,mappings,runs_p,reports_p,force_flumut=flags['Master']['flumut'],force_genin=flags['Master']['genin'],force_getref=flags['Master']['getref'],mode=mode,single_sample=single)
     #flumut:
     if flags['Master']['flumut']:

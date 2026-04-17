@@ -287,9 +287,30 @@ def create_segment_background_table(df_segments,flags,seg_lens,mappings):
     <tbody>"""
     df=pd.read_table(df_segments,index_col=False)
     mask=df['ASSIGNED_BY']!='L-BLAST'
-    df.loc[mask,'HOST']=df.loc[mask,'HOST'].apply(lambda x: clean_host(x,taxa_dict,level='Species',drop_unknown=True))
-    df.loc[mask,'GENOTYPE']=df.loc[mask,'GENOTYPE'].apply(lambda x: clean_genotype(x))
-    df.loc[mask,'COUNTRY']=df.loc[mask,'COUNTRY'].apply(lambda x: ast.literal_eval(x) if x.startswith('{') else x)
+    subset = df.loc[mask, 'HOST'].copy()
+
+    cleaned = subset.apply(lambda x: clean_host(x, taxa_dict, level='Species', drop_unknown=True))
+
+    #print(cleaned.head(20))
+    #print(cleaned.map(type).value_counts())
+    df['HOST_CLEAN'] = None
+    df['GENOTYPE_CLEAN'] = None
+    df['COUNTRY_CLEAN'] = None
+
+    df.loc[mask, 'HOST_CLEAN'] = df.loc[mask, 'HOST'].apply(
+        lambda x: clean_host(x, taxa_dict, level='Species', drop_unknown=True)
+        )
+
+    df.loc[mask, 'GENOTYPE_CLEAN'] = df.loc[mask, 'GENOTYPE'].apply(
+    lambda x: clean_genotype(x)
+  ) 
+
+    df.loc[mask, 'COUNTRY_CLEAN'] = df.loc[mask, 'COUNTRY'].apply(
+    lambda x: ast.literal_eval(x) if isinstance(x, str) and x.startswith('{') else x
+)
+    #print("DEBUG COUNTRY_CLEAN")
+    #print(df.loc[mask, 'COUNTRY_CLEAN'].head(10)) 
+    #print(df.loc[mask, 'COUNTRY_CLEAN'].map(type).value_counts())
     for row in range(len(df)):
         seq=df.loc[row,'SAMPLE_NAME']
         segment=seq_names[seq] if seq in seq_names else "Not Available"
@@ -309,21 +330,28 @@ def create_segment_background_table(df_segments,flags,seg_lens,mappings):
         else:
             length_html = str(length)
         reference=flags['Sample'][f'{segment}_ref'][0] if flags['Sample'][f'{segment}_ref'] else "Not Available"
-        host_species=df.loc[row,'HOST']
-        geo_countries=df.loc[row,'COUNTRY']
+        if mask.loc[row]:
+          host_species = df.loc[row, 'HOST_CLEAN']
+          geo_countries = df.loc[row, 'COUNTRY_CLEAN']
+          genotype = df.loc[row, 'GENOTYPE_CLEAN']
+        else:
+          host_species = df.loc[row, 'HOST']
+          geo_countries = df.loc[row, 'COUNTRY']
+          genotype = df.loc[row, 'GENOTYPE']
         if mask.loc[row]:
           host_order=rollup_counts_taxa(host_species,taxa_dict,level='Order',drop_unknown=True)
           host_class=rollup_counts_taxa(host_species,taxa_dict,level='Class',drop_unknown=True)
-          geo_regions=rollup_counts_geo(geo_countries,geo_dict,mode='region',drop_unknown=True)
-          geo_continents=rollup_counts_geo(geo_countries,geo_dict,mode='continent',drop_unknown=True)
+          geo_countries = df.loc[row, 'COUNTRY_CLEAN']
+          geo_regions = rollup_counts_geo(geo_countries, geo_dict, mode='region', drop_unknown=True)
+          geo_continents = rollup_counts_geo(geo_countries, geo_dict, mode='continent', drop_unknown=True)
         else:
           host_order=rollup_taxa(host_species,taxa_dict,level='Order')
           host_class=rollup_taxa(host_species,taxa_dict,level='Class')  
-          geo_regions=rollup_geo(geo_countries,geo_dict,mode='region')
-          geo_continents=rollup_geo(geo_countries,geo_dict,mode='continent')
+          geo_countries = df.loc[row, 'COUNTRY_CLEAN']
+          geo_regions = rollup_counts_geo(geo_countries, geo_dict, mode='region', drop_unknown=True)
+          geo_continents = rollup_counts_geo(geo_countries, geo_dict, mode='continent', drop_unknown=True)
         perc_id=df.loc[row,'%ID']
         cluster=df.loc[row,'CLUSTER']
-        genotype=df.loc[row,'GENOTYPE']
         assigned_by=df.loc[row,'ASSIGNED_BY']
         if note!="":
             note+="; Segment not found" if segment=="Not Available" else ""

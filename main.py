@@ -34,7 +34,7 @@ def seq_enum(counter: int) -> str:
     Returns:
     str: A sequence identifier string in the format 'Seq_{counter}'.
     """
-    return f'>Seq_{counter}'
+    return f'>Seq-{counter}'
 
 def fasta_preprocess(filename: str,samples_path: str,runs_path:str, min_seq_len: int, max_seq_len: int, flags:dict, verbose: bool=False) -> None:
     """
@@ -458,11 +458,12 @@ def report_compiler(clust_dict:dict,samples_p:str,filename:str,mappings_dict:dic
     mappings=mappings_dict
     if list(to_remote)!=[]:
         for seq in to_remote:
-            to_report[seq]=['Unassigned','NA','NA','NA','NA','NA','NA']
+            to_report[seq]=['Unassigned','NA','NA','NA','NA','NA','NA','NA']
     with open(f'{os.path.join(reports_p,filename.replace(".fasta",""))}_ID_Report.txt','w') as report:
         report.write('Sample_name\tRepresentative\tCluster\t%ID\tSegment\tGenotype\tHost\tCountry\tAssigned_by\n'.upper())
         for key in to_report:
             mapped=mappings[f'>{key}']
+            #print(to_report[key])
             report.write(f'{mapped}\t{to_report[key][0]}\t\
                          {to_report[key][1]}\t{to_report[key][2]}\t{to_report[key][3]}\t\
                             {to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\t{to_report[key][7]}\n')
@@ -593,22 +594,31 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,repor
 
     '''
     #opening report and extracting data
-    report=pd.read_table(os.path.join(reports_p,report), index_col=False)
-
-    # contig + single-sample: restrict downstream work to the selected best contigs
+    report_df=pd.read_table(os.path.join(reports_p,report), index_col=False)
+# contig + single-sample: restrict downstream work to the selected best contigs
     if mode == 'contig' and single_sample:
-        best = flags.get('Sample', {}).get('best_segments')
-        if isinstance(best, dict) and any(best.values()):
-            keep_internal = set(v for v in best.values() if v)
-            keep_original = set(mappings[iid] for iid in keep_internal if iid in mappings)
-            if keep_original and 'SAMPLE_NAME' in report.columns:
-                report = report[report['SAMPLE_NAME'].isin(keep_original)]
-    report=report.dropna()
-    report['SEGMENT']=report['SEGMENT'].apply(lambda x: ast.literal_eval(x))
-    report['SEGMENT']=report['SEGMENT'].apply(lambda x: list(x.keys())[0] if type(x)==dict else int(x))
-    Segments=report['SEGMENT'].to_list()
-    Genotypes=report['GENOTYPE'].to_list()
-    Seq_names=report['SAMPLE_NAME'].to_list()
+        best = flags.get('Sample', {}).get('best_segments', {})
+
+        if isinstance(best, dict):
+            keep_internal = {v for v in best.values() if v}
+            keep_original = {mappings[iid] for iid in keep_internal if iid in mappings}
+
+            #print("keep_internal:", keep_internal)
+            print("keep_original:", keep_original)
+
+        if 'SAMPLE_NAME' in report_df.columns:
+            if keep_original:
+                report_df = report_df.loc[report_df['SAMPLE_NAME'].isin(keep_original)].copy()
+                print(f"Filtered report to {len(report_df)} rows")
+            else:
+                print("keep_original empty: keeping original report unchanged")
+        report_df.to_csv(os.path.join(reports_p,report),sep='\t',index=False)
+    report_df=report_df.dropna()
+    report_df['SEGMENT']=report_df['SEGMENT'].apply(lambda x: ast.literal_eval(x))
+    report_df['SEGMENT']=report_df['SEGMENT'].apply(lambda x: list(x.keys())[0] if type(x)==dict else int(x))
+    Segments=report_df['SEGMENT'].to_list()
+    Genotypes=report_df['GENOTYPE'].to_list()
+    Seq_names=report_df['SAMPLE_NAME'].to_list()
     #Type conversions and dictionary creations
     for i in range(len(Genotypes)):
         try:
@@ -620,8 +630,8 @@ def redirector(report:str,flags:dict,filename:str,mappings:dict,runs_p:str,repor
     Segments=[int(i) for i in Segments]
     Seq_gen=dict(zip(Seq_names,Genotypes))
     Seq_seg=dict(zip(Seq_names,Segments))
-    Seq_ref={k:v for k in report['SAMPLE_NAME'] for v in\
-        report['REPRESENTATIVE'][report['SAMPLE_NAME']==k]}
+    Seq_ref={k:v for k in report_df['SAMPLE_NAME'] for v in\
+        report_df['REPRESENTATIVE'][report_df['SAMPLE_NAME']==k]}
     Seq_HA=''
     Seq_NA=''
     remap={v:k for k,v in mappings.items()}
@@ -755,10 +765,10 @@ def conform_to_flumut(flagdict: dict, sample_path: str, filename: str) -> None:
     outdict = {}
     for key in flt_fasta:
         if key in seq_seg:
-            outdict[f'{key}|{seq_seg[key]}'] = flt_fasta[key]
+            outdict[f'{key}_{seq_seg[key]}'] = flt_fasta[key]
     dict_to_fasta(outdict, os.path.join(sample_path, f'{filename.replace(".fasta","")}_to_flumut'))
         
-def run_flumut(reports_p: str, samples_p: str, filename: str, regex="(.+)\|(.+)"):
+def run_flumut(reports_p: str, samples_p: str, filename: str, regex="(.+)\_(.+)"):
     """
     Executes the flumut tool to analyze sequence data and generate mutation reports.
 
@@ -965,18 +975,79 @@ def to_genin2(flagsdict):
             return True
     return False
 
-def run_genin2(flagsdict, samples_p, filename, reports_p):
+def run_genin2(samples_p, filename, genin_report):
     """
     Executes the GenIn2 tool for genotyping analysis based on HA genotype and clade.
     Parameters:
     flagsdict (dict): A dictionary containing flags and sequence information, including HA genotype and clade.
     samples_p (str): The path to the directory containing the sample FASTA file.
-    filename (str): The name of the FASTA file to be processed.
-    reports_p (str): The path to the directory where the report files will be stored.
+    filename (str): The name of the FASTA file to be processed
+    genin_report (str): The path to the directory where the report files will be stored.
     Returns:
     None: This function does not return a value. It executes a system command to run GenIn2 and generate output files.
     """
-    pass
+    subprocess.run(['genin2','-o', genin_report, os.path.join(samples_p,f"{filename}_to_flumut.fasta")])
+
+def remap_genin2(reports_p,genin_report,mappings, flagsdict):
+    """
+    Remaps Genin2 report to the sample names. Also parses and stores genin values on flagsdict
+    Parameters:
+    reports_p (str): The directory path where the reports are stored.
+    genin_report (str): The path to the NextClade report file.
+    mappings_dict (dict): A dictionary containing the mapping of original sequence names to new names.
+    genin
+    """
+    genin_df=pd.read_table(os.path.join(reports_p,genin_report),index_col=False)
+    genin_df['Sample Name']=genin_df['Sample Name'].apply(lambda x: mappings[f'>{x}'])
+
+    genin_df.to_csv(os.path.join(reports_p,genin_report),sep='\t',index=False)
+    segment_cols = ['PB2', 'PB1', 'PA', 'NP', 'NA', 'MP', 'NS']
+
+    result = {}
+
+    for _, row in genin_df.iterrows():
+        sample_name = row['Sample Name']
+        valid = row[segment_cols][row[segment_cols] != '?']
+
+        genotype = row['Genotype']
+        sub_genotype = row['Sub-genotype']
+
+        if pd.isna(sub_genotype) or str(sub_genotype).strip() == '':
+            sub_genotype = 'N/A'
+
+        if len(valid) == 1:
+            col_name = valid.index[0]
+            value = valid.iloc[0]
+
+            result[sample_name] = {
+                'segment': col_name,
+                'value': value,
+                'Genotype': genotype,
+                'Sub-genotype': sub_genotype
+            }
+
+            #print(sample_name, col_name, value, genotype, sub_genotype)
+
+        elif len(valid) == 0:
+            result[sample_name] = {
+                'segment': None,
+                'value': None,
+                'Genotype': genotype,
+                'Sub-genotype': sub_genotype
+            }
+
+            #print(sample_name, "no value", genotype, sub_genotype)
+
+        else:
+            result[sample_name] = {
+                'segment': 'MULTIPLE',
+                'value': valid.to_dict(),
+                'Genotype': genotype,
+                'Sub-genotype': sub_genotype
+            }
+
+            #print(sample_name, "not more than one value", genotype, sub_genotype)
+    flagsdict['Sample']['Genin_genotypes']=result
 
 #### MAIN
 def parser():
@@ -1197,9 +1268,13 @@ def main(flagdict=flagdict):
 
     #Genin2
     flags['Master']['genin']=to_genin2(flags)
+    if flags['Master']['genin']:
+        run_genin2(runs_p,file,os.path.join(reports_p,f'{file}_genin.tsv'))
+        remap_genin2(reports_p,f'{file}_genin.tsv',mappings,flags)
+
 
     #final report
-    if flags['Master']['single']:
+    if flags['Master']['single'] and mode=='consensus':
         generate_final_report(os.path.join(reports_p,f"{file}_ID_Report.txt"),flags,seg_lens,mappings,muts_loci_meaning,html_skeleton,reports_p,f'{file}_final_report')
     
 

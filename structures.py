@@ -19,6 +19,7 @@ flagdict={"Fasta Preprocess":{"Rejected Sequences":[]},"Master":{"C_BLAST":True,
                      'PB2_ref':[],'PB1_ref':[], 'PA_ref':[], 'NP_ref':[],'MP_ref':[],'NS_ref':[],'PB2_len':0,'PB1_len':0,
                      'PA_len':0,'HA_len':0,'NP_len':0,'MP_len':0,'NA_len':0,'NS_len':0,'H_gen':'','N_gen':'',"clade":'','HA_muts':[],
                      'NA_muts':[],'PB2_muts':[],'PB1_muts':[],'PA_muts':[],'NP_muts':[],'MP_muts':[],'NS_muts':[],
+                     'Genin_genotypes':{},
                      # contig + single-sample: selected best contig per segment (internal IDs)
                      'best_segments':{seg: None for seg in iav_segments},
                      'best_segments_min_len':0,

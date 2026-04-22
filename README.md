@@ -51,7 +51,7 @@ The pipeline also runs 2 different modes and its behaviour can be altered by sev
     This mode will should be used for consensus sequences and will filter sequences by size, identify them and run several tools: flumut on any sequence identified as H5Nx; Nextclade on every H1,H3 and H5 HA sequences.
 * Forcing tools (_argument: -ff/--force (flumut,getref)_):
     The argument force will allow the user to perform additional bioinformatics analysis that are not offered as defaults by the modes, for example, it will allow flumut analysis on drafted contigs or getref on consensus samples. Nextclade is not forceable at this moment.
-* Single-sample (*argument: -ss/-single_sample (on/off) - default:on*):
+* Single-sample (*argument: -ss/--single_sample (on/off) - default:on*):
     Single-sample is a sub-mode of consensus mode used for when a user has a fasta file with 1-8 sequences of one sample. This mode will allow for more quality checks on the final report. For multi-sample fasta files please turn this option off.
 * Turn off tools (*argument: -off/--turn_off (nextclade,getref,flumut)*):
     This argument allows the user to turn off specific tools thar could be turned on by default.
@@ -86,3 +86,14 @@ This pipeline comprises several steps:
 
 The following diagram illustrates the pipeline workflow:
 [Pipeline workflow (light)](Diagrama_pipeline.drawio.png) or [Pipeline workflow (dark)](Diagrama_pipeline.drawio.dark.png)
+
+## Update
+The user can and should update AFluID to better represent the genomic diversity of the current flu season or the new circulating variants of non-seasonal Influenza A.
+The update can be made using the update.py module. 
+The user should go to NCBI Virus and download the sequence metadata with matching headers to the metadata, and keeping the column header case as is. The values should be from the date os the provious updato to the present. A fasta file with the same sequences should also be downloaded, from the same database.
+These files will need to be placed in the 
+``update/`` directory and declared within the command run:
+```
+python3 update.py -c CONFIG_FILE -ff UPDATE_FASTA -mf UPDATE_CSV
+```
+Depending on the size of the sequence database the update can take a long while so it's recommended you use a screen if working on a shared server.

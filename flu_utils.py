@@ -196,10 +196,21 @@ def concat_fasta(flist,outname):
             output.write(f'{key}\n{value}\n')
 
 def dict_to_fasta(seqs,outname:str):
-    '''coverts a dictionary into a fasta file
-    Accepts: seqs(dict) - dict with key as fasta header and values as seq
-    outname(str) - name of the output fasta file
-    Returns: fasta file'''
+    """
+    Converts a dictionary into a FASTA file.
+
+    Parameters
+    ----------
+    seqs : dict
+        Dictionary with FASTA headers as keys and sequences as values.
+    outname : str
+        Output path WITHOUT the .fasta extension.
+
+    Returns
+    -------
+    None
+        Writes the output to '{outname}.fasta'.
+    """
     with open(f'{outname}.fasta','w') as output:
         for key, value in seqs.items():
             output.write(f'{key}\n{value}\n')

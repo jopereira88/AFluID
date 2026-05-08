@@ -1089,6 +1089,7 @@ def parser():
     parser.add_argument('-rm', '--remove_previous', type=str, help='Remove previous files', default='on', choices=('on', 'off'), required=False)
     parser.add_argument('-Ml', '--max_length', type=int, help='Maximum sequence length', required=False)
     parser.add_argument('-ml', '--min_length', type=int, help='Minimum sequence length', required=False)
+    parser.add_argument('--skip_cdhit', action='store_true', help='Bypass cd-hit-est-2d and send all sequences directly to cluster BLAST')
 
     args = parser.parse_args()
 
@@ -1218,6 +1219,7 @@ def run_pipeline_for_file(
     rm_previous: bool,
     max_len: int,
     min_len: int,
+    skip_cdhit: bool = False,
     batch: bool = False,
     batch_dir: str = '',
     timestamp: str = ''
@@ -1280,6 +1282,7 @@ def run_pipeline_for_file(
     print('Single sample mode:', single)
     print('Max sequence length:', max_len)
     print('Min sequence length:', min_len)
+    print('Skip CD-HIT:', skip_cdhit)
 
     sample_stem = Path(filename).stem
 
@@ -1312,37 +1315,12 @@ def run_pipeline_for_file(
         verbose=True
     )
 
-    cd_hit_est_2d(
-        formatted_fasta_fp,
-        os.path.join(clusters_p, config["Filenames"]["cluster"]),
-        formatted_fasta_base,
-        float(config["CD-HIT"]["identity"]),
-        logs_p,
-        log_tag=output_tag,
-        verbose=True
-    )
-
-    assignments = cluster_assign(
-        f'format_{output_tag}.clstr',
-        formatted_fasta_fp,
-        runs_p
-    )
-
-    dict_cluster = json_load(os.path.join(clusters_p, config["Filenames"]["cluster_pkl"]))
-
-    cluster_compile(
-        assignments,
-        dict_cluster,
-        os.path.join(runs_p, f'format_{output_tag}.assign'),
-        reports_p
-    )
-
-    cluster_report = cluster_miner(reports_p, output_tag, runs_p, runs_p, flags)
-
     threads = int(config['blast']['num_threads'])
     num_seqs = int(config['blast']['max_target_seqs'])
 
-    if flags['Master']['C_BLAST']:
+    if skip_cdhit:
+        cluster_report = {}
+        flags['Master']['C_BLAST'] = True
         blast_cluster = bclust(
             clusters_p,
             config["Filenames"]["cluster_metadata"],
@@ -1354,9 +1332,8 @@ def run_pipeline_for_file(
             flags,
             num_threads=threads,
             max_tar_seq=num_seqs,
-            fasta=f"{output_tag}_to_blast.fasta"
+            fasta=f"format_{output_tag}.fasta"
         )
-
         if flags['Master']['L_BLAST']:
             blast_report = reblast(
                 metadata_p,
@@ -1391,14 +1368,90 @@ def run_pipeline_for_file(
                 bclust_dict=blast_cluster
             )
     else:
-        report_compiler(
-            cluster_report,
-            runs_p,
-            output_tag,
-            mappings,
-            reports_p,
-            flags
+        cd_hit_est_2d(
+            formatted_fasta_fp,
+            os.path.join(clusters_p, config["Filenames"]["cluster"]),
+            formatted_fasta_base,
+            float(config["CD-HIT"]["identity"]),
+            logs_p,
+            log_tag=output_tag,
+            verbose=True
         )
+
+        assignments = cluster_assign(
+            f'format_{output_tag}.clstr',
+            formatted_fasta_fp,
+            runs_p
+        )
+
+        dict_cluster = json_load(os.path.join(clusters_p, config["Filenames"]["cluster_pkl"]))
+
+        cluster_compile(
+            assignments,
+            dict_cluster,
+            os.path.join(runs_p, f'format_{output_tag}.assign'),
+            reports_p
+        )
+
+        cluster_report = cluster_miner(reports_p, output_tag, runs_p, runs_p, flags)
+
+        if flags['Master']['C_BLAST']:
+            blast_cluster = bclust(
+                clusters_p,
+                config["Filenames"]["cluster_metadata"],
+                runs_p,
+                blasts_p,
+                config["Filenames"]["cluster"],
+                runs_p,
+                output_tag,
+                flags,
+                num_threads=threads,
+                max_tar_seq=num_seqs,
+                fasta=f"{output_tag}_to_blast.fasta"
+            )
+
+            if flags['Master']['L_BLAST']:
+                blast_report = reblast(
+                    metadata_p,
+                    config["Filenames"]["metadata"],
+                    runs_p,
+                    blasts_p,
+                    config["Filenames"]["l_blast"],
+                    runs_p,
+                    output_tag,
+                    threads=threads,
+                    max_tar_seq=num_seqs,
+                    fasta=f"{output_tag}_to_reblast.fasta"
+                )
+                report_compiler(
+                    cluster_report,
+                    runs_p,
+                    output_tag,
+                    mappings,
+                    reports_p,
+                    flags,
+                    bclust_dict=blast_cluster,
+                    blast_dict=blast_report
+                )
+            else:
+                report_compiler(
+                    cluster_report,
+                    runs_p,
+                    output_tag,
+                    mappings,
+                    reports_p,
+                    flags,
+                    bclust_dict=blast_cluster
+                )
+        else:
+            report_compiler(
+                cluster_report,
+                runs_p,
+                output_tag,
+                mappings,
+                reports_p,
+                flags
+            )
 
     if mode == 'contig' and single:
         id_report_fp = os.path.join(reports_p, f"{output_tag}_ID_Report.txt")
@@ -1513,6 +1566,7 @@ def main(flagdict=flagdict):
     off_apps = args.turn_off
     force_apps = args.force
     single = args.single_sample.lower() == 'on'
+    skip_cdhit = args.skip_cdhit
 
     config = configparser.ConfigParser()
     read_files = config.read(config_file)
@@ -1559,6 +1613,7 @@ def main(flagdict=flagdict):
     print('Update Flumut DB:', update_flumut)
     print('Max sequence length:', max_len)
     print('Min sequence length:', min_len)
+    print('Skip CD-HIT:', skip_cdhit)
     print('Batch directory:', args.batch_dir if args.batch_dir else '.')
 
     # Check required paths
@@ -1644,6 +1699,7 @@ def main(flagdict=flagdict):
                     rm_previous=rm_previous,
                     max_len=max_len,
                     min_len=min_len,
+                    skip_cdhit=skip_cdhit,
                     batch=True,
                     batch_dir=batch_label,
                     timestamp=timestamp
@@ -1714,6 +1770,7 @@ def main(flagdict=flagdict):
         rm_previous=rm_previous,
         max_len=max_len,
         min_len=min_len,
+        skip_cdhit=skip_cdhit,
         batch=False,
         batch_dir='',
         timestamp=''

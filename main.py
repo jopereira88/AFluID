@@ -1526,10 +1526,20 @@ def run_pipeline_for_file(
             update_local_db=True
         )
 
-    if single or forced_genin:
+    if forced_genin:
+        flags['Master']['genin'] = True
+    elif single:
         flags['Master']['genin'] = to_genin2(flags)
     else:
         flags['Master']['genin']= False
+
+    if flags['Master']['genin']:
+        # GenIn2 currently consumes the same filtered FASTA prepared for FluMut.
+        flags['Final Report']['Sequences for GenIn'] = list(
+            dict.fromkeys(flags['Final Report']['Sequences for FluMut'])
+        )
+    else:
+        flags['Final Report']['Sequences for GenIn'] = []
 
     if flags['Master']['genin']:
         run_genin2(runs_p, output_tag, os.path.join(reports_p, f'{output_tag}_genin.tsv'))

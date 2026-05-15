@@ -1053,8 +1053,8 @@ def to_html_report(
     if genin2:
         tab4_input = '<input type="radio" id="tab4" name="tab">'
         tab4_label = '<label for="tab4">Genin2</label>'
-        tab4_active_css = ',\\n    input#tab4:checked ~ .tab-controls label[for="tab4"]'
-        tab4_display_css = ',\\n    input#tab4:checked ~ .tab-panels #panel4'
+        tab4_active_css = ',\n    input#tab4:checked ~ .tab-controls label[for="tab4"]'
+        tab4_display_css = ',\n    input#tab4:checked ~ .tab-panels #panel4'
         tab4_panel = """
         <article id="panel4" class="tab-panel">
           <h2>Genin2</h2>

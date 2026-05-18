@@ -7,7 +7,34 @@ from flu_utils import metadata_dict,parse_clstr
 from collections import Counter
 import json
 
-def cluster_charact(metadata,metadata_p,clstr,cluster_p,cluster_pkl_name,cluster_meta_name):
+def cluster_charact(metadata: str,metadata_p: str,clstr: str,cluster_p: str,cluster_pkl_name: str,cluster_meta_name: str) -> None:
+    """
+    Build cluster-level metadata summaries from a CD-HIT cluster file.
+
+    Parameters
+    ----------
+    metadata : str
+        Metadata filename to read from ``metadata_p``.
+    metadata_p : str
+        Directory containing the metadata file.
+    clstr : str
+        CD-HIT ``.clstr`` filename to read from ``cluster_p``.
+    cluster_p : str
+        Directory containing cluster artifacts and output files.
+    cluster_pkl_name : str
+        Stem used for the JSON summary output.
+    cluster_meta_name : str
+        Filename for the tabular cluster metadata report.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This function writes both a JSON summary and a tab-delimited cluster
+    metadata table.
+    """
     meta=metadata_dict(os.path.join(metadata_p,metadata),[9,10,12,11],sep=';')
     clusters=parse_clstr(os.path.join(cluster_p,clstr))
     #getting metadata annotations per cluster

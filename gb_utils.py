@@ -3,19 +3,33 @@
 from Bio import SeqIO, Entrez
 from io import StringIO
 from time import sleep
+from typing import Any, Iterable, Optional
 
 
 
-def fetch_genbank(access, file_name, email, db='nucleotide',start_acc=None,write_mode='a'):
-    '''
-    Fetches GenBank files from NCBI given a list of accession numbers and saves them into a file
-    Args:
-    access: list of accession numbers
-    file_name: str, name of the output file
-    db: str, database to fetch from (default is 'nucleotide')
-    email: str, Entrez email
-    Returns: list of failed files
-    '''
+def fetch_genbank(access: list[str], file_name: str, email: str, db: str = 'nucleotide',start_acc: Optional[str] = None,write_mode: str = 'a') -> None:
+    """
+    Fetch GenBank records from NCBI and append them to a file.
+
+    Parameters
+    ----------
+    access : list
+        Accession numbers to fetch.
+    file_name : str
+        Output file path.
+    email : str
+        Entrez email address.
+    db : str, default 'nucleotide'
+        NCBI database name.
+    start_acc : str, optional
+        Accession from which fetching should resume.
+    write_mode : str, default 'a'
+        File mode used to open the output file.
+
+    Returns
+    -------
+    None
+    """
     Entrez.email = email
 
     failed=[]
@@ -52,18 +66,25 @@ def fetch_genbank(access, file_name, email, db='nucleotide',start_acc=None,write
         for elem in failed:
             print(elem)
 
-def filter_genbank_by_accession(input_file, output_file, accession_list, verbose=False):
+def filter_genbank_by_accession(input_file: str, output_file: str, accession_list: Iterable[str], verbose: bool = False) -> list[str]:
     """
-    Filters a multi-entry GenBank file to keep only records with accessions in a specified list.
-    Also reports accessions in the list that are not found in the GenBank file.
-    
-    Args:
-        input_file (str): Path to the input multi-entry GenBank file.
-        output_file (str): Path to the output GenBank file with filtered entries.
-        accession_list (list of str): List of accession numbers (with versions) to keep.
-    
-    Returns:
-        list of str: Accessions from the list that were not found in the GenBank file.
+    Filter a multi-entry GenBank file by accession.
+
+    Parameters
+    ----------
+    input_file : str
+        Path to the input GenBank file.
+    output_file : str
+        Path to the filtered output GenBank file.
+    accession_list : list
+        Versioned accession numbers to keep.
+    verbose : bool, default False
+        Whether progress messages should be printed.
+
+    Returns
+    -------
+    list
+        Requested accessions that were not found in the input file.
     """
     # Convert accession list to a set for fast lookup
     accession_set = set(accession_list)
@@ -98,10 +119,23 @@ def filter_genbank_by_accession(input_file, output_file, accession_list, verbose
 
     return list(missing_accessions)
 
-def append_genbank_from_gb(main_file, other_file, verbose=False):
-    '''
-    
-    '''
+def append_genbank_from_gb(main_file: str, other_file: str, verbose: bool = False) -> None:
+    """
+    Append missing GenBank records from one file into another.
+
+    Parameters
+    ----------
+    main_file : str
+        Path to the GenBank file to update.
+    other_file : str
+        Path to the GenBank file providing candidate records.
+    verbose : bool, default False
+        Whether progress messages should be printed.
+
+    Returns
+    -------
+    None
+    """
     #Create a set with the two gb record ID's
     main_records=set()
     other_records=set()
@@ -139,10 +173,22 @@ def append_genbank_from_gb(main_file, other_file, verbose=False):
         if verbose:
             print(f'Appended {len(outfile)} new records to {main_file}')
 
-def check_missing(gb_file,accession_list):
-    '''
-    
-    '''
+def check_missing(gb_file: str,accession_list: Iterable[str]) -> Optional[list[str]]:
+    """
+    Check which accessions are absent from a GenBank file.
+
+    Parameters
+    ----------
+    gb_file : str
+        Path to the GenBank file to inspect.
+    accession_list : iterable
+        Accessions expected to be present.
+
+    Returns
+    -------
+    list or None
+        Missing accessions, or None when all requested records are present.
+    """
     # Mines genbank ID's into a set
     accession_set=set(accession_list)
     gb_set=set()
@@ -155,22 +201,41 @@ def check_missing(gb_file,accession_list):
         print('No missing records')
     else:
         return list(missing)
-def gb_to_fasta(input_file,output_file):
-    '''
-    Converts a gb file to fasta file (header+full sequence)
+def gb_to_fasta(input_file: str,output_file: str) -> None:
+    """
+    Convert a GenBank file to FASTA format.
 
-    '''
+    Parameters
+    ----------
+    input_file : str
+        Input GenBank file path.
+    output_file : str
+        Output FASTA file path.
+
+    Returns
+    -------
+    None
+    """
     with open(output_file, "w") as fasta_file:
         SeqIO.write(SeqIO.parse(input_file, "genbank"), fasta_file, "fasta")    
 
-def gb_feature_to_fasta(input_file, output_file, feature_type='CDS'):
-    '''
-    Converts a gb file into a fasta file
-    param input_file(str): path for input gb file
-    param output_file(str): path and name of the output fasta file
-    param feture_type(str): type of feature to mine the sequence CDS/gene
-    (Default = 'CDS')
-    '''
+def gb_feature_to_fasta(input_file: str, output_file: str, feature_type: str = 'CDS') -> None:
+    """
+    Export selected GenBank feature sequences to FASTA.
+
+    Parameters
+    ----------
+    input_file : str
+        Input GenBank file path.
+    output_file : str
+        Output FASTA file path.
+    feature_type : str, default 'CDS'
+        Feature type to extract.
+
+    Returns
+    -------
+    None
+    """
     with open(output_file, "w") as fasta_file:
         for record in SeqIO.parse(input_file, "genbank"):
             record_id=f'{record.id}'
@@ -182,39 +247,85 @@ def gb_feature_to_fasta(input_file, output_file, feature_type='CDS'):
                     fasta_file.write(f">{record_id} | {feature_type}_{feature.qualifiers.get('gene',['unknown'])[0]}\n")
                     fasta_file.write(str(feature_seq) + "\n")
 
-def get_gb(gb_file,accessions):
-    '''
-    Fetches a genbank record from a gb file by acession numbers
+def get_gb(gb_file: str,accessions: Iterable[str]) -> list[Any]:
+    """
+    Retrieve selected GenBank records from a local file.
 
-    '''
+    Parameters
+    ----------
+    gb_file : str
+        GenBank file path.
+    accessions : iterable
+        Record identifiers to extract.
+
+    Returns
+    -------
+    list
+        Matching sequence records.
+    """
     outrecords=[]
     for record in SeqIO.parse(gb_file,'genbank'):
         if record.id in accessions:
             outrecords.append(record)
     return outrecords
 
-def create_lookup(gbfile):
+def create_lookup(gbfile: str) -> set[str]:
+    """
+    Build a set of record identifiers from a GenBank file.
+
+    Parameters
+    ----------
+    gbfile : str
+        Path to the GenBank file.
+
+    Returns
+    -------
+    set
+        Set of GenBank record identifiers.
+    """
     ids=set()
     for record in SeqIO.parse(gbfile,'genbank'):
         ids.add(record.id)
     return ids
 
-def is_record(gbfile,accession):
-    '''
-    Parses a gb file to check if an accession exists as a record in a gb file
-    '''
+def is_record(gbfile: str,accession: str) -> bool:
+    """
+    Check whether a GenBank file contains a record identifier.
+
+    Parameters
+    ----------
+    gbfile : str
+        GenBank file path.
+    accession : str
+        Record identifier to search for.
+
+    Returns
+    -------
+    bool
+        True when the record exists, otherwise False.
+    """
     for record in SeqIO.parse(gbfile,'genbank'):
         if record.id == accession:
             return True
     return False
-def fetch_genbank_list(access, email, db='nucleotide'):
-    '''
-    Fetches GenBank files from NCBI given a list of accession numbers and saves them into a list
-    access: list of accession numbers
-    db: str, database to fetch from (default is 'nucleotide')
-    email: str, Entrez email
-    Returns: list of failed files
-    '''
+def fetch_genbank_list(access: list[str], email: str, db: str = 'nucleotide') -> list[Any]:
+    """
+    Fetch GenBank records from NCBI into memory.
+
+    Parameters
+    ----------
+    access : list
+        Accession numbers to fetch.
+    email : str
+        Entrez email address.
+    db : str, default 'nucleotide'
+        NCBI database name.
+
+    Returns
+    -------
+    list
+        Parsed GenBank sequence records.
+    """
     Entrez.email = email 
     failed=[]
     output=[]
@@ -243,14 +354,41 @@ def fetch_genbank_list(access, email, db='nucleotide'):
             parsed_output.append(seq_record)
     return parsed_output
 
-def write_gb(records,output):
+def write_gb(records: Iterable[Any],output: str) -> None:
+    """
+    Write GenBank records to a file.
+
+    Parameters
+    ----------
+    records : iterable
+        Sequence records to write.
+    output : str
+        Output GenBank file path.
+
+    Returns
+    -------
+    None
+    """
     with open(output,'w') as gbfile:
         SeqIO.write(records,gbfile,'genbank')
 
-def append_genbank_from_list(main_file, records, verbose=False):
-    '''
-    
-    '''
+def append_genbank_from_list(main_file: str, records: Iterable[Any], verbose: bool = False) -> None:
+    """
+    Append missing GenBank records from an in-memory record list.
+
+    Parameters
+    ----------
+    main_file : str
+        Path to the GenBank file to update.
+    records : iterable
+        Sequence records to add when their identifiers are absent.
+    verbose : bool, default False
+        Whether progress messages should be printed.
+
+    Returns
+    -------
+    None
+    """
     #Create a set with the two gb record ID's
     main_records=set()
     other_records=set()
@@ -279,16 +417,30 @@ def append_genbank_from_list(main_file, records, verbose=False):
         if verbose:
             print(f'Appended {len(outfile)} new records to {main_file}')
 
-def fetch_fasta(access, file_name, email, db='nucleotide',start_acc=None,write_mode='a'):
-    '''
-    Fetches Fasta files from NCBI given a list of accession numbers and saves them into a file
-    Args:
-    access: list of accession numbers
-    file_name: str, name of the output file
-    db: str, database to fetch from (default is 'nucleotide')
-    email: str, Entrez email
-    Returns: list of failed files
-    '''
+def fetch_fasta(access: list[str], file_name: str, email: str, db: str = 'nucleotide',start_acc: Optional[str] = None,write_mode: str = 'a') -> Optional[list[Any]]:
+    """
+    Fetch FASTA records from NCBI and append them to a file.
+
+    Parameters
+    ----------
+    access : list
+        Accession numbers to fetch.
+    file_name : str
+        Output file path.
+    email : str
+        Entrez email address.
+    db : str, default 'nucleotide'
+        NCBI database name.
+    start_acc : str, optional
+        Accession from which fetching should resume.
+    write_mode : str, default 'a'
+        File mode used to open the output file.
+
+    Returns
+    -------
+    list or None
+        Failed accession batches when an error occurs, otherwise None.
+    """
     Entrez.email = email
 
     failed=[]
@@ -325,7 +477,23 @@ def fetch_fasta(access, file_name, email, db='nucleotide',start_acc=None,write_m
         for elem in failed:
             print(elem)
         return failed
-def filter_fasta_by_accession(infile,access,outfile):
+def filter_fasta_by_accession(infile: str,access: Iterable[str],outfile: str) -> None:
+    """
+    Filter a FASTA file to records with selected accessions.
+
+    Parameters
+    ----------
+    infile : str
+        Input FASTA file path.
+    access : iterable
+        Accessions to retain.
+    outfile : str
+        Output FASTA file path.
+
+    Returns
+    -------
+    None
+    """
     outputs=[]
     with open(infile,'r') as handle:
         records=SeqIO.parse(handle,'fasta')
@@ -336,10 +504,23 @@ def filter_fasta_by_accession(infile,access,outfile):
         for elem in outputs:
             SeqIO.write(elem,filtered,'fasta')
 
-def remove_records(fasta_file,accessions,output_file):
-    '''
-    Removes records from a fasta file given a list of accessions
-    '''
+def remove_records(fasta_file: str,accessions: Iterable[str],output_file: str) -> None:
+    """
+    Remove selected records from a FASTA file.
+
+    Parameters
+    ----------
+    fasta_file : str
+        Input FASTA file path.
+    accessions : iterable
+        Record identifiers to remove.
+    output_file : str
+        Output FASTA file path.
+
+    Returns
+    -------
+    None
+    """
     records=[]
     with open(fasta_file,'r') as handle:
         for record in SeqIO.parse(handle,'fasta'):

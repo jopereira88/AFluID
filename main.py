@@ -9,7 +9,9 @@ import json
 import ast
 import glob
 import re
+import hashlib
 import numpy as np
+from typing import Any, Iterable, Optional
 from collections import defaultdict
 from flu_utils import seq_get,dict_to_fasta,headers_from_mult_fas,parse_clstr,json_load,\
     seq_filter_get,mine_genotype_H,mine_genotype_N,convert_to_prop, mine_single_HA,mine_single_NA
@@ -24,17 +26,55 @@ from gb_utils import fetch_genbank_list, append_genbank_from_list, get_gb, creat
 from pathlib import Path
 from datetime import datetime
 
+
+def _set_tool_status(flags: dict, tool: str, status: str, detail: str = '') -> None:
+    """Store pipeline tool execution status in the shared flags object."""
+    flags.setdefault('Tool Status', {})
+    flags['Tool Status'][tool] = {
+        'status': status,
+        'detail': detail,
+    }
+
+
+def _write_flags_json(reports_p: str, output_tag: str, flags: dict) -> None:
+    """Persist pipeline flags for post-run inspection."""
+    with open(os.path.join(reports_p, f'{output_tag}_flags.json'), 'w') as f:
+        json.dump(flags, f)
+
+
+def _require_files(paths: Iterable[str], context: str) -> None:
+    """Raise a clear error when expected pipeline artifacts are missing."""
+    missing = [path for path in paths if not os.path.exists(path)]
+    if missing:
+        missing_str = ', '.join(missing)
+        raise FileNotFoundError(f'{context}. Missing required file(s): {missing_str}')
+
+
+def _run_command(command: list[str], tool_name: str, sample_tag: str = '', expected_outputs: Optional[Iterable[str]] = None,
+                 stdout: Any = None, stderr: Any = None) -> None:
+    """Run an external command and raise a contextual error on failure."""
+    completed = subprocess.run(command, stdout=stdout, stderr=stderr)
+    if completed.returncode != 0:
+        sample_msg = f' for {sample_tag}' if sample_tag else ''
+        raise RuntimeError(f'{tool_name} failed{sample_msg} with exit code {completed.returncode}')
+    if expected_outputs:
+        _require_files(expected_outputs, f'{tool_name} completed but did not produce all expected outputs')
+
 ### STEP FUNCTIONS
 #### FASTA PREPROCESS
 def seq_enum(counter: int) -> str:
     """
-    Generate a sequence identifier string in the format 'Seq_{counter}'.
+    Generate an internal sequence identifier.
 
-    Parameters:
-    counter (int): The counter value to be used in the sequence identifier.
+    Parameters
+    ----------
+    counter : int
+        Counter value to encode in the identifier.
 
-    Returns:
-    str: A sequence identifier string in the format 'Seq_{counter}'.
+    Returns
+    -------
+    str
+        Sequence identifier in the ``>Seq-<counter>`` format.
     """
     return f'>Seq-{counter}'
 
@@ -47,13 +87,33 @@ def fasta_preprocess(
     max_seq_len: int,
     flags: dict,
     verbose: bool = False
-) -> dict:
+) -> dict[str, str]:
     """
-    Preprocess a FASTA file by removing sequences outside of a length range and
-    saving the processed sequences and header mappings.
+    Filter, rename, and export sequences for a pipeline run.
 
-    filename is the relative path inside samples_path.
-    file_tag is the flat identifier used for generated files in runs_path.
+    Parameters
+    ----------
+    filename : str
+        Relative FASTA path inside ``samples_path``.
+    samples_path : str
+        Directory containing the input FASTA file.
+    runs_path : str
+        Directory where the formatted FASTA file is written.
+    file_tag : str
+        Flat identifier used for generated filenames.
+    min_seq_len : int
+        Minimum accepted sequence length.
+    max_seq_len : int
+        Maximum accepted sequence length.
+    flags : dict
+        Pipeline state dictionary updated with rejected sequence headers.
+    verbose : bool, default False
+        Whether filtering decisions should be printed.
+
+    Returns
+    -------
+    dict
+        Mapping from internal sequence identifiers to original FASTA headers.
     """
     fasta_dict = seq_get(os.path.join(samples_path, filename))
 
@@ -75,6 +135,15 @@ def fasta_preprocess(
         else:
             print(f'{len(to_pop)} sequences were removed for being outside the length thresholds:')
 
+    if not fasta_dict:
+        failure_msg = (
+            f'No sequences remained after preprocessing for {filename} '
+            f'after applying length thresholds {min_seq_len}-{max_seq_len}.'
+        )
+        flags.setdefault('Fasta Preprocess', {})
+        flags['Fasta Preprocess']['Failure'] = failure_msg
+        raise ValueError(failure_msg)
+
     header_mapping = {}
     counter = 1
     for header in fasta_dict:
@@ -94,7 +163,29 @@ def fasta_preprocess(
 #### CD-HIT
 def cd_hit_est_2d(filename: str, cluster_reps: str, output: str, identity: float, logs_p: str, log_tag: str = None, verbose: bool = False) -> None:
     """
-    Run CD-HIT-EST-2D to cluster sequences based on a given identity threshold.
+    Run `cd-hit-est-2d` against cluster representatives.
+
+    Parameters
+    ----------
+    filename : str
+        Input FASTA file to classify.
+    cluster_reps : str
+        FASTA file of cluster representative sequences.
+    output : str
+        Output file stem for CD-HIT results.
+    identity : float
+        Sequence identity threshold.
+    logs_p : str
+        Directory where stdout and stderr logs are written when
+        ``verbose=False``.
+    log_tag : str, optional
+        Filename stem to use for log files.
+    verbose : bool, default False
+        Whether to stream subprocess output directly to the terminal.
+
+    Returns
+    -------
+    None
     """
     tag = log_tag if log_tag is not None else os.path.basename(filename)
 
@@ -102,26 +193,45 @@ def cd_hit_est_2d(filename: str, cluster_reps: str, output: str, identity: float
         log_fp = os.path.join(logs_p, f'{tag}_cd_hit.log')
         err_fp = os.path.join(logs_p, f'{tag}_cd_hit.err')
         with open(log_fp, 'a') as out, open(err_fp, 'a') as err:
-            subprocess.run(
+            _run_command(
                 ['cd-hit-est-2d', '-i', cluster_reps, '-i2', filename, '-o', output, '-c', str(identity), '-g', '1'],
+                'cd-hit-est-2d',
+                sample_tag=tag,
+                expected_outputs=[f'{output}.clstr', output],
                 stdout=out,
                 stderr=err
             )
     else:
-        subprocess.run(['cd-hit-est-2d', '-i', cluster_reps, '-i2', filename, '-o', output, '-c', str(identity), '-g', '1'])
+        _run_command(
+            ['cd-hit-est-2d', '-i', cluster_reps, '-i2', filename, '-o', output, '-c', str(identity), '-g', '1'],
+            'cd-hit-est-2d',
+            sample_tag=tag,
+            expected_outputs=[f'{output}.clstr', output],
+        )
 
 #### CLUSTERING AND CLUSTER REPORT
-def cluster_assign(report:str, headers_file:str,runsdir:str) -> dict:
-    '''
-    Assign sequences to clusters based on a CD-HIT-EST-2D output file and a FASTA headers file.
-    Parameters:
-    report (str): The path to the CD-HIT-EST-2D output file.
-    headers_file (str): The path to the FASTA headers file.
-    runsdir (str): The path to the runs directory.
-    Returns:
-    dict: A dictionary mapping cluster identifiers to assigned sequences.
-    Outputs a .assign file with cluster assignments.
-    '''
+def cluster_assign(report:str, headers_file:str,runsdir:str) -> dict[str, str]:
+    """
+    Assign sample sequences to CD-HIT clusters.
+
+    Parameters
+    ----------
+    report : str
+        CD-HIT ``.clstr`` filename inside ``runsdir``.
+    headers_file : str
+        FASTA file whose headers should be assigned.
+    runsdir : str
+        Directory containing the cluster report and assignment output.
+
+    Returns
+    -------
+    dict
+        Mapping from normalized sample headers to cluster identifiers.
+
+    Notes
+    -----
+    A ``.assign`` file is written to ``runsdir``.
+    """
     #parsing clstr file
     clusters=parse_clstr(os.path.join(runsdir,report),access_only=False)
     report={}
@@ -177,16 +287,25 @@ def cluster_assign(report:str, headers_file:str,runsdir:str) -> dict:
                     repo.write(f'>Unassigned;{report["Unassigned"][i]}\n')
     return sample_dict
 
-def cluster_compile(s_dict:str, cl_dict:dict, cl_assign:str, reports_path:str) -> None:
-    '''
-    Compile cluster assignments into a report file.
-    Parameters:
-    s_dict (str): The path to the sample dictionary file.
-    cl_assign (str): The path to the cluster assignments file.
-    cl_dict (dict): The cluster metadata dictionary.
-    reports_path (str): The path to the reports directory.
-    Outputs a compiled report file.
-    '''
+def cluster_compile(s_dict: dict[str, str], cl_dict: dict[str, list[dict[str, int] | str]], cl_assign:str, reports_path:str) -> None:
+    """
+    Combine cluster assignments with cluster metadata into a report.
+
+    Parameters
+    ----------
+    s_dict : dict
+        Sample-to-cluster assignment mapping.
+    cl_dict : dict
+        Cluster metadata lookup dictionary.
+    cl_assign : str
+        Path to the assignment file created by :func:`cluster_assign`.
+    reports_path : str
+        Directory where the compiled report is written.
+
+    Returns
+    -------
+    None
+    """
     #opening sample and cluster dictionaries and cluster assignments
     dict_sample=s_dict
     with open(cl_assign, 'r') as fh:
@@ -234,7 +353,7 @@ def cluster_compile(s_dict:str, cl_dict:dict, cl_assign:str, reports_path:str) -
                 report.write(f'{sample}\t{compiler[sample][0]}\t{compiler[sample][1]}\n')
     print(f"Compiled report generated in {outpath}")
 
-def cluster_miner(reports_p: str, file_tag: str, formatted_fasta_dir: str, runs_p: str, flags: dict) -> dict:
+def cluster_miner(reports_p: str, file_tag: str, formatted_fasta_dir: str, runs_p: str, flags: dict) -> dict[str, list[str | dict[str, int | float]]]:
     """
     Mine cluster report for unassigned samples and output them to BLAST.
 
@@ -323,16 +442,24 @@ def cluster_miner(reports_p: str, file_tag: str, formatted_fasta_dir: str, runs_
     return to_report
 
 #### BLAST
-def best_blast(runs_p:str,blast_report:str,thres_id:float=0.0) -> dict:
-    '''
-    Selects the best matches for blast reports and returns them as a dict
-    Parameters:
-    runs_p (str): path to the runs directory
-    blast_report (str): name of the blast output file
-    thres_id (float) - default = 0.0: minimum threshold of identity to accept a sequence
-    Returns:
-    best_blast(dict): dictionary with {sequence_name:[representative, identity]}}
-    '''
+def best_blast(runs_p:str,blast_report:str,thres_id:float=0.0) -> dict[str, list[str | float]]:
+    """
+    Select the best BLAST hit for each query sequence.
+
+    Parameters
+    ----------
+    runs_p : str
+        Directory containing the BLAST output file.
+    blast_report : str
+        BLAST tabular report filename.
+    thres_id : float, default 0.0
+        Minimum percent identity required to keep a hit.
+
+    Returns
+    -------
+    dict
+        Mapping from query sequence name to ``[representative, identity]``.
+    """
     blast_df=pd.read_table(os.path.join(runs_p,blast_report),header=None,\
                            names=["qseqid", "sseqid", "pident", "length", "mismatch", "gapopen",\
                                    "qstart", "qend", "sstart", "send", "evalue", "bitscore"])
@@ -345,24 +472,50 @@ def best_blast(runs_p:str,blast_report:str,thres_id:float=0.0) -> dict:
         out_dict[row.qseqid]=[row.sseqid,row.pident]
     return out_dict
 
-def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,file_tag:str,flags:dict,num_threads:int=2,max_tar_seq:int=7,fasta:str='to_blast.fasta') -> dict:
-    '''
-    Run BLAST analysis on unassigned samples.
-    Parameters:
-    metadata_p (str): The path to the metadata directory.
-    samples_p (str): The path to the samples directory.
-    blast_p (str): The path to the BLAST database directory.
-    runs_p (str): The path to the runs directory.
-    filename (str): The name of the sample file.
-    num_threads (int): The number of threads to use for BLAST analysis.
-    max_tar_seq (int): The maximum number of target sequences to return.
-    fasta (str): The name of the FASTA file to be analyzed
-    Outputs a .fasta file for BLAST analysis.
-    '''
+def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,file_tag:str,flags:dict,num_threads:int=2,max_tar_seq:int=7,fasta:str='to_blast.fasta') -> dict[str, list[str | float | dict[str, int | float]]]:
+    """
+    Run cluster-representative BLAST for unassigned sequences.
+
+    Parameters
+    ----------
+    metadata_p : str
+        Directory containing the cluster metadata table.
+    metadata_f : str
+        Cluster metadata filename.
+    samples_p : str
+        Directory containing the FASTA file to BLAST.
+    blast_p : str
+        Directory containing the BLAST database.
+    blast_db : str
+        BLAST database name.
+    runs_p : str
+        Directory where BLAST outputs are written.
+    file_tag : str
+        Flat sample identifier used to name output files.
+    flags : dict
+        Pipeline state dictionary updated with re-BLAST routing decisions.
+    num_threads : int, default 2
+        Number of BLAST threads.
+    max_tar_seq : int, default 7
+        Maximum number of target sequences to request.
+    fasta : str, default 'to_blast.fasta'
+        FASTA filename to analyze inside ``samples_p``.
+
+    Returns
+    -------
+    dict
+        Best-hit cluster annotations keyed by query sequence name.
+    """
     access=headers_from_mult_fas([os.path.join(samples_p,fasta)],only_name=True)
     queries=[key for key in access]
-    subprocess.run(['blastn', '-db', os.path.join(blast_p,blast_db), '-query', os.path.join(samples_p,fasta),
-               '-out', os.path.join(runs_p,f"{file_tag}_bcrun.txt"), '-outfmt', '6', '-num_threads', str(num_threads), '-max_target_seqs', str(max_tar_seq)])
+    blast_output = os.path.join(runs_p, f"{file_tag}_bcrun.txt")
+    _run_command(
+        ['blastn', '-db', os.path.join(blast_p,blast_db), '-query', os.path.join(samples_p,fasta),
+         '-out', blast_output, '-outfmt', '6', '-num_threads', str(num_threads), '-max_target_seqs', str(max_tar_seq)],
+        'cluster BLAST',
+        sample_tag=file_tag,
+        expected_outputs=[blast_output],
+    )
     b_tab=best_blast(runs_p,f"{file_tag}_bcrun.txt",thres_id=90.0)
     pd.set_option('display.max_colwidth', None)
     metadata=pd.read_table(os.path.join(metadata_p,metadata_f),index_col=False)
@@ -390,23 +543,46 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
         flags['Master']['L_BLAST']=False
     return b_tab
 
-def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,file_tag:str,threads:int=2,max_tar_seq:int=7,fasta:str='to_reblast.fasta') -> dict:
+def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,file_tag:str,threads:int=2,max_tar_seq:int=7,fasta:str='to_reblast.fasta') -> dict[str, list[str | float]]:
+    """
+    Run local-database BLAST for sequences still unassigned after cluster BLAST.
 
-    '''
-    Re-run BLAST analysis on unassigned samples.
-    Parameters:
-    metadata_p (str): The path to the metadata directory.
-    samples_p (str): The path to the samples directory.
-    blast_p (str): The path to the BLAST database directory.
-    runs_p (str): The path to the runs directory.
-    filename (str): The name of the sample file.
-    num_threads (int): The number of threads to use for BLAST analysis.
-    max_tar_seq (int): The maximum number of target sequences to return.
-    fasta (str): The name of the FASTA file to be analyzed
+    Parameters
+    ----------
+    metadata_p : str
+        Directory containing the local metadata table.
+    metadata_f : str
+        Metadata filename.
+    samples_p : str
+        Directory containing the FASTA file to BLAST.
+    blast_p : str
+        Directory containing the BLAST database.
+    blast_db : str
+        BLAST database name.
+    runs_p : str
+        Directory where BLAST outputs are written.
+    file_tag : str
+        Flat sample identifier used to name output files.
+    threads : int, default 2
+        Number of BLAST threads.
+    max_tar_seq : int, default 7
+        Maximum number of target sequences to request.
+    fasta : str, default 'to_reblast.fasta'
+        FASTA filename to analyze inside ``samples_p``.
 
-    '''
-    subprocess.run(['blastn', '-db', os.path.join(blast_p,blast_db), '-query', os.path.join(samples_p,fasta),
-               '-out', os.path.join(runs_p,f"{file_tag}_brun.txt"), '-outfmt', '6', '-num_threads', str(threads), '-max_target_seqs', str(max_tar_seq)])
+    Returns
+    -------
+    dict
+        Best-hit local metadata annotations keyed by query sequence name.
+    """
+    blast_output = os.path.join(runs_p, f"{file_tag}_brun.txt")
+    _run_command(
+        ['blastn', '-db', os.path.join(blast_p,blast_db), '-query', os.path.join(samples_p,fasta),
+         '-out', blast_output, '-outfmt', '6', '-num_threads', str(threads), '-max_target_seqs', str(max_tar_seq)],
+        'local BLAST',
+        sample_tag=file_tag,
+        expected_outputs=[blast_output],
+    )
     report=best_blast(runs_p,f"{file_tag}_brun.txt")
     metadata=pd.read_csv(os.path.join(metadata_p,metadata_f),sep=';',index_col=False)
     for key in report:
@@ -417,19 +593,33 @@ def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str
     return report
 
 #### REPORT COMPILER
-def report_compiler(clust_dict, samples_p, file_tag, mappings_dict, reports_p, flags, bclust_dict={}, blast_dict={}):
-    '''
-    Compile BLAST and cluster reports into a final report.
-    Parameters:
-    clust_dict (dict): The cluster report dictionary.
-    samples_p (str): Path to samples file
-    bclust_dict (dict): The BLAST cluster report dictionary.
-    blast_dict (dict): The BLAST report dictionary.
-    file_tag (str): The name of the sample file.
-    mappings_dict (dict): The mappings dictionary.
-    reports_p (str): The path to the reports directory.
-    Outputs a final report file.
-    '''
+def report_compiler(clust_dict: dict[str, list[str | dict[str, int | float]]], samples_p: str, file_tag: str, mappings_dict: dict[str, str], reports_p: str, flags: dict, bclust_dict: Optional[dict[str, list[str | float | dict[str, int | float]]]] = {}, blast_dict: Optional[dict[str, list[str | float]]] = {}) -> None:
+    """
+    Merge cluster and BLAST assignments into the final ID report.
+
+    Parameters
+    ----------
+    clust_dict : dict
+        Cluster-derived report entries.
+    samples_p : str
+        Directory containing the formatted sample FASTA.
+    file_tag : str
+        Flat sample identifier used to name output files.
+    mappings_dict : dict
+        Mapping from internal FASTA identifiers to original sequence headers.
+    reports_p : str
+        Directory where the final report is written.
+    flags : dict
+        Pipeline state dictionary used during report generation.
+    bclust_dict : dict, default {}
+        Cluster-BLAST report entries.
+    blast_dict : dict, default {}
+        Local BLAST report entries.
+
+    Returns
+    -------
+    None
+    """
     seqs = headers_from_mult_fas(
     [os.path.join(samples_p, f'format_{file_tag}.fasta')],
     only_name=True,
@@ -479,7 +669,7 @@ def report_compiler(clust_dict, samples_p, file_tag, mappings_dict, reports_p, f
     #print(f'Report generated in {os.path.join(reports_p,filename.replace(".fasta",""))}_ID_Report.txt')
 
 #### REPORT PARSERS
-def _parse_segment_cell(x):
+def _parse_segment_cell(x: Any) -> Optional[int]:
     """Parse SEGMENT cell from ID_Report into int 1..8 (or None)."""
     if pd.isna(x):
         return None
@@ -502,7 +692,7 @@ def _parse_segment_cell(x):
         return None
 
 
-def _parse_pident_cell(x):
+def _parse_pident_cell(x: Any) -> Optional[float]:
     """Parse %ID cell from ID_Report into float (or None)."""
     if pd.isna(x):
         return None
@@ -515,19 +705,37 @@ def _parse_pident_cell(x):
         return None
 
 
-def compute_best_segments_iterative(id_report_fp: str, formatted_fasta_fp: str, mappings: dict, start_min_len: int,
+def compute_best_segments_iterative(id_report_fp: str, formatted_fasta_fp: str, mappings: dict[str, str], start_min_len: int,
                                    step_bp: int = contig_single_min_step_bp,
                                    floor_bp: int = contig_single_min_floor_bp) -> tuple:
-    """Select a single best contig per segment without overwriting.
+    """
+    Select a single best contig per segment without overwriting selections.
 
-    Identification is assumed to have been run once on the full formatted FASTA.
-    We then iterate selection thresholds: start_min_len, start_min_len-step, ... until floor_bp.
+    Parameters
+    ----------
+    id_report_fp : str
+        Path to the ID report TSV.
+    formatted_fasta_fp : str
+        Path to the formatted FASTA file.
+    mappings : dict
+        Mapping from internal FASTA identifiers to original sequence headers.
+    start_min_len : int
+        Initial minimum contig length threshold.
+    step_bp : int, default ``contig_single_min_step_bp``
+        Step size used when relaxing the minimum contig length.
+    floor_bp : int, default ``contig_single_min_floor_bp``
+        Lowest minimum contig length allowed during iterative relaxation.
 
-    Selection order: contig length desc, then %ID desc.
-    Fill-once: once a segment is filled, it is never replaced.
+    Returns
+    -------
+    tuple
+        ``(best_segments_internal, min_len_used)`` where the first item maps
+        canonical segment names to selected internal sequence identifiers.
 
-    Returns:
-      (best_segments_internal, min_len_used)
+    Notes
+    -----
+    Candidates are ranked by contig length and then by percent identity. Once a
+    segment is filled it is not replaced in later iterations.
     """
     best = {seg: None for seg in iav_segments}
 
@@ -551,7 +759,7 @@ def compute_best_segments_iterative(id_report_fp: str, formatted_fasta_fp: str, 
     df['pident'] = df['pident'].fillna(-1.0).astype(float)
     df['internal_id'] = df['SAMPLE_NAME'].astype(str).map(remap)
 
-    def _len_for_internal(sid):
+    def _len_for_internal(sid: Any) -> int:
         if not isinstance(sid, str):
             return 0
         seq = seqs.get(sid)
@@ -591,7 +799,22 @@ def compute_best_segments_iterative(id_report_fp: str, formatted_fasta_fp: str, 
     return best, int(min_used)
 
 #### REDIRECTOR
-def safe_literal_eval(x):
+def safe_literal_eval(x: Any) -> Any:
+    """
+    Safely parse a scalar or container represented as a string.
+
+    Parameters
+    ----------
+    x : Any
+        Value to parse. Empty values and values that cannot be parsed are
+        returned unchanged.
+
+    Returns
+    -------
+    Any
+        Parsed Python literal when parsing succeeds, otherwise the original
+        value.
+    """
     if pd.isna(x):
         return x
     s = str(x).strip()
@@ -601,16 +824,46 @@ def safe_literal_eval(x):
         return ast.literal_eval(s)
     except Exception:
         return x
-def redirector(report, flags, file_tag, mappings, runs_p, reports_p,
-               force_flumut, force_genin, force_getref, mode, single_sample=True) -> None:
-    '''
-    Redirects samples to aditional post-identification tools.
-    Linchpin function that populates the 'Sample' and 'Final_report' dicts of flagsdict
-    Parameters:
-    report (str): The path to the final report file.
-    flags (dict): The flags dictionary.
+def redirector(report: str, flags: dict, file_tag: str, mappings: dict[str, str], runs_p: str, reports_p: str,
+               force_flumut: bool, force_genin: bool, force_getref: bool, mode: str, single_sample: bool = True) -> None:
+    """
+    Populate downstream analysis targets from an ID report.
 
-    '''
+    Parameters
+    ----------
+    report : str
+        Name of the ID report file inside ``reports_p``.
+    flags : dict
+        Mutable pipeline state dictionary updated in place.
+    file_tag : str
+        Flat sample identifier used in generated filenames.
+    mappings : dict
+        Mapping from internal FASTA identifiers to original sequence headers.
+    runs_p : str
+        Path to the run workspace.
+    reports_p : str
+        Path to the reports directory.
+    force_flumut : bool
+        Whether FluMut should be forced even when routing rules would skip it.
+    force_genin : bool
+        Whether GenIn2 should be forced.
+    force_getref : bool
+        Whether reference retrieval should be forced.
+    mode : {"contig", "consensus"}
+        Pipeline execution mode.
+    single_sample : bool, default True
+        Whether the current run is treated as a single-sample analysis.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This function mutates ``flags`` in place, fills the ``Sample`` and
+    ``Final Report`` sections, and may rewrite the report file when contig mode
+    is restricted to the selected best segments.
+    """
     #opening report and extracting data
     report_df=pd.read_table(os.path.join(reports_p,report), index_col=False)
 # contig + single-sample: restrict downstream work to the selected best contigs
@@ -758,19 +1011,32 @@ def redirector(report, flags, file_tag, mappings, runs_p, reports_p,
 
 
 #### FLUMUT PATH
-def update_flumut_db():
-    subprocess.run(['flumut', '--update'])
+def update_flumut_db() -> None:
+    """Update the local FluMut database using the external CLI."""
+    _run_command(['flumut', '--update'], 'FluMut DB update')
 
 def conform_to_flumut(flagdict: dict, sample_path: str, file_tag: str) -> None:
     """
-    Adjusts sequence headers to conform to the flumut format and writes the adjusted sequences to a new FASTA file.
-    Parameters:
-    flagdict (dict): A dictionary containing flags and sequence information, including which sequences are designated for flumut processing.
-    sample_path (str): The directory path where the input FASTA file is located.
-    filename (str): The name of the FASTA file to be processed.
+    Write a FluMut-ready FASTA containing only selected sequences.
 
-    Returns:
-    None: This function does not return a value. It writes the adjusted sequences to a new FASTA file named 'to_flumut' in the specified sample path.
+    Parameters
+    ----------
+    flagdict : dict
+        Pipeline state dictionary containing per-segment assignments and the
+        list of sequences selected for FluMut.
+    sample_path : str
+        Directory containing ``format_{file_tag}.fasta``.
+    file_tag : str
+        Flat sample identifier used to name the output FASTA.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Output headers are suffixed with the segment name so they match FluMut's
+    expected naming convention.
     """
     seq_seg = {}
     for key in flagdict['Sample']:
@@ -785,32 +1051,56 @@ def conform_to_flumut(flagdict: dict, sample_path: str, file_tag: str) -> None:
             outdict[f'{key}_{seq_seg[key]}'] = flt_fasta[key]
     dict_to_fasta(outdict, os.path.join(sample_path, f'{file_tag}_to_flumut'))
         
-def run_flumut(reports_p: str, samples_p: str, file_tag: str, regex="(.+)\_(.+)"):
+def run_flumut(reports_p: str, samples_p: str, file_tag: str, regex: str = "(.+)\_(.+)") -> None:
     """
-    Executes the flumut tool to analyze sequence data and generate mutation reports.
+    Run FluMut on the prepared sample FASTA.
 
-    Parameters:
-    reports_p (str): The path to the directory where the report files will be stored.
-    samples_p (str): The path to the directory containing the sample FASTA file.
-    file_tag (str): The base name of the sample file, used to generate report filenames.
-    regex (str): A regular expression pattern used by flumut for parsing sequence headers. Defaults to "(.+)\|(.+)".
+    Parameters
+    ----------
+    reports_p : str
+        Directory where FluMut report files are written.
+    samples_p : str
+        Directory containing the FluMut-ready FASTA file.
+    file_tag : str
+        Flat sample identifier used to build input and output filenames.
+    regex : str, default ``"(.+)\_(.+)"``
+        Regular expression passed to FluMut for parsing FASTA headers.
 
-    Returns:
-    None: This function does not return a value. It executes a system command to run flumut and generate output files.
+    Returns
+    -------
+    None
     """
     print("Running flumut")
-    subprocess.run(['flumut', '-m', os.path.join(reports_p,f"{file_tag}_markers.tsv"), '-M', os.path.join(reports_p,f"{file_tag}_mutations.tsv"),
-                    '-l', os.path.join(reports_p,f"{file_tag}_literature.tsv"), os.path.join(samples_p,f"{file_tag}_to_flumut.fasta"), '-n', regex])
+    markers_fp = os.path.join(reports_p, f"{file_tag}_markers.tsv")
+    mutations_fp = os.path.join(reports_p, f"{file_tag}_mutations.tsv")
+    literature_fp = os.path.join(reports_p, f"{file_tag}_literature.tsv")
+    _run_command(
+        ['flumut', '-m', markers_fp, '-M', mutations_fp,
+         '-l', literature_fp, os.path.join(samples_p, f"{file_tag}_to_flumut.fasta"), '-n', regex],
+        'FluMut',
+        sample_tag=file_tag,
+        expected_outputs=[markers_fp, mutations_fp],
+    )
 def remap_flumut_report(reports_dir: str, mappings: dict, filename: str) -> None:
     """
-    Remaps flumut report to the sample names.
-    Parameters:
-    reports_dir (str): The directory path where the reports are stored.
-    mappings (dict): A dictionary containing the mapping of original sequence names to new names.
-    filename (str): The name of the samples file
+    Replace internal sequence identifiers in FluMut reports.
 
-    Returns:
-    None. The function modifies the flumut report files in-place by replacing the original sequence names with the new names.
+    Parameters
+    ----------
+    reports_dir : str
+        Directory containing the FluMut output tables.
+    mappings : dict
+        Mapping from internal FASTA identifiers to original sequence headers.
+    filename : str
+        File stem used by the FluMut output files.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    The markers and mutations TSV files are rewritten in place.
     """
     #Create a mapping dictionary with the original sequence names replaced by the new names
     mapping_dict = {key.replace('>', ''): value for key, value in mappings.items()}
@@ -828,16 +1118,26 @@ def remap_flumut_report(reports_dir: str, mappings: dict, filename: str) -> None
 
     #Save the modified mutations report file
     mut_report.to_csv(os.path.join(reports_dir,f'{filename}_mutations.tsv'), sep='\t', index=False)
-def mut_miner(dataframe,muts_of_interest,flagsdict):
+def mut_miner(dataframe: str, muts_of_interest: dict[str, Iterable[str]], flagsdict: dict) -> None:
     """
-    Mines the flumut markers report for mutations of interest according to Alvarez et al 2025 and 
-    Mohapra et al 2023.
-    Parameters:
-    dataframe (str): The path to the flumut markers report file.
-    muts_of_interest (dict): A dictionary containing mutations of interest for each segment.
-    flagsdict (dict): A dictionary to store the mined mutations of interest.
-    Returns:
-    None: This function does not return a value. It updates the flagsdict with the mined 
+    Extract mutations of interest from a FluMut report.
+
+    Parameters
+    ----------
+    dataframe : str
+        Path to the FluMut markers report TSV file.
+    muts_of_interest : dict
+        Mapping of segment names to the mutations that should be tracked.
+    flagsdict : dict
+        Pipeline state dictionary updated with per-segment mutation hits.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Matching mutations are appended to ``flagsdict['Sample']["<SEG>_muts"]``.
     """
     # Load mutations of interest from pickle file
     # MUTATION PATTERN
@@ -892,12 +1192,30 @@ def mut_miner(dataframe,muts_of_interest,flagsdict):
                 flagsdict["Sample"][f"{j}_muts"].append(mut)
 
 #### GET REFERENCE PATH
-def get_reference(listref,references_p,db_p,file_tag,email=None, update_local_db=False):
+def get_reference(listref: Iterable[str], references_p: str, db_p: str, file_tag: str, email: Optional[str] = None, update_local_db: bool = False) -> None:
     """
-    Retrieves reference genomes from GenBank and stores them locally.
-    Parameters:
-    listref (list): A list of reference genome names.
-    references_p (str): The path to the directory where the reference genomes will be stored."""
+    Retrieve reference GenBank records and export them for a sample.
+
+    Parameters
+    ----------
+    listref : list
+        Reference accession identifiers to retrieve.
+    references_p : str
+        Directory where the sample-specific reference files are written.
+    db_p : str
+        Filename of the local GenBank database inside ``references_p``.
+    file_tag : str
+        Flat sample identifier used to name the output files.
+    email : str, optional
+        Email address used by NCBI Entrez when remote retrieval is needed.
+    update_local_db : bool, default False
+        Whether remotely fetched records should also be appended to the local
+        reference database.
+
+    Returns
+    -------
+    None
+    """
     references=set(listref)
     found=[]
     missing=[]
@@ -923,7 +1241,23 @@ def get_reference(listref,references_p,db_p,file_tag,email=None, update_local_db
     if update_local_db:
         append_genbank_from_list(os.path.join(references_p,db_p),remote)
 #### NEXTCLADE PATH
-def fasta_to_nextclade(flagsdict, samples_p, file_tag):
+def fasta_to_nextclade(flagsdict: dict, samples_p: str, file_tag: str) -> None:
+    """
+    Split selected HA sequences into Nextclade input FASTA files.
+
+    Parameters
+    ----------
+    flagsdict : dict
+        Pipeline state dictionary containing the sequences routed to Nextclade.
+    samples_p : str
+        Directory containing ``format_{file_tag}.fasta``.
+    file_tag : str
+        Flat sample identifier used to name the generated FASTA files.
+
+    Returns
+    -------
+    None
+    """
     to_nextclade = {'H1': [], 'H3': [], 'H5': []}
 
     for genotype in to_nextclade:
@@ -944,19 +1278,55 @@ def fasta_to_nextclade(flagsdict, samples_p, file_tag):
 
         if outdict:
             dict_to_fasta(outdict, os.path.join(samples_p, f'{file_tag}_to_nextclade_{genotype}'))
-def run_nextclade(fasta,flagsdict,reports_p,samples_p,file_tag):
+def run_nextclade(fasta: str,flagsdict: dict,reports_p: str,samples_p: str,file_tag: str) -> None:
+    """
+    Run Nextclade for each supported HA genotype present in the sample.
+
+    Parameters
+    ----------
+    fasta : str
+        Prefix of the genotype-specific FASTA files to analyze.
+    flagsdict : dict
+        Pipeline state dictionary containing the sequences selected for
+        Nextclade.
+    reports_p : str
+        Directory where Nextclade TSV reports are written.
+    samples_p : str
+        Directory containing the genotype-specific FASTA files.
+    file_tag : str
+        Flat sample identifier used to name output reports.
+
+    Returns
+    -------
+    None
+    """
     dict_builds_broad={'H1':'flu_h1n1pdm_ha_broad','H3':'flu_h3n2_ha_broad','H5':'community/moncla-lab/iav-h5/ha/all-clades'}
     for key in flagsdict['Final Report']['Sequences for NextClade']:
         if flagsdict['Final Report']['Sequences for NextClade'][key] != []:
-            fasta_gen=key    
-            subprocess.run(['nextclade', 'run', '-d', dict_builds_broad[fasta_gen], '--output-tsv', os.path.join(reports_p,f"{file_tag}_{fasta_gen}_nextclade.tsv"), os.path.join(samples_p,f"{fasta}_{fasta_gen}.fasta")])
-def remap_nextclade(reports_p,nextclade_report,mappings_dict):
+            fasta_gen=key
+            nextclade_fp = os.path.join(reports_p, f"{file_tag}_{fasta_gen}_nextclade.tsv")
+            _run_command(
+                ['nextclade', 'run', '-d', dict_builds_broad[fasta_gen], '--output-tsv', nextclade_fp, os.path.join(samples_p,f"{fasta}_{fasta_gen}.fasta")],
+                f'Nextclade {fasta_gen}',
+                sample_tag=file_tag,
+                expected_outputs=[nextclade_fp],
+            )
+def remap_nextclade(reports_p: str,nextclade_report: str,mappings_dict: dict[str, str]) -> None:
     """
-    Remaps NextClade report to the sample names.
-    Parameters:
-    reports_p (str): The directory path where the reports are stored.
-    nextclade_report (str): The path to the NextClade report file.
-    mappings_dict (dict): A dictionary containing the mapping of original sequence names to new names.
+    Replace internal sequence identifiers in a Nextclade report.
+
+    Parameters
+    ----------
+    reports_p : str
+        Directory containing the Nextclade TSV file.
+    nextclade_report : str
+        Filename of the Nextclade TSV report.
+    mappings_dict : dict
+        Mapping from internal FASTA identifiers to original sequence headers.
+
+    Returns
+    -------
+    None
     """
     nextclade_rep=pd.read_table(os.path.join(reports_p,nextclade_report),index_col=False)
     nextclade_rep['seqName']=nextclade_rep['seqName'].apply(lambda x: mappings_dict[f'>{x}'])
@@ -964,9 +1334,26 @@ def remap_nextclade(reports_p,nextclade_report,mappings_dict):
 
 #### GENIN PATH
 
-def mine_clade(clade_file, flagsdict, mappings_dict):
+def mine_clade(clade_file: str, flagsdict: dict, mappings_dict: dict[str, str]) -> str:
     """
-    Mines the clade from the NextClade report file based on the HA genotype.
+    Extract the HA clade assignment from a Nextclade report.
+
+    Parameters
+    ----------
+    clade_file : str
+        Path to the Nextclade TSV report.
+    flagsdict : dict
+        Pipeline state dictionary containing HA genotype and selected sequence
+        information.
+    mappings_dict : dict
+        Mapping from internal FASTA identifiers to original sequence headers.
+
+    Returns
+    -------
+    str
+        Clade assignment, ``"Unassigned"``, ``"Unassigned by error"``, or
+        ``"Non-applicable"`` depending on the report contents and routing
+        context.
     """
     clade = ""
 
@@ -997,32 +1384,75 @@ def mine_clade(clade_file, flagsdict, mappings_dict):
 
     return clade
 
-def to_genin2(flagsdict):
+def to_genin2(flagsdict: dict) -> bool:
     """
-    Determines if the sample should be directed to GenIn2 based on HA genotype and clade
-    Parameters:
-    flagsdict (dict): A dictionary containing flags and sequence information, including HA genotype and clade.
-    Returns:
-    bool: True if the sample should be directed to GenIn2, False otherwise."""
+    Decide whether the sample should be sent to GenIn2.
+
+    Parameters
+    ----------
+    flagsdict : dict
+        Pipeline state dictionary containing the inferred HA genotype and
+        clade.
+
+    Returns
+    -------
+    bool
+        True when the sample is H5 and belongs to clade ``2.3.4.4b``,
+        otherwise False.
+    """
     if flagsdict["Sample"]["H_gen"] == "H5":
         if flagsdict["Sample"]["clade"] == "2.3.4.4b":
             return True
     return False
 
-def run_genin2(samples_p, file_tag, genin_report):
+def run_genin2(samples_p: str, file_tag: str, genin_report: str) -> None:
     """
-    Executes the GenIn2 tool for genotyping analysis based on HA genotype and clade.
-    Parameters:
-    flagsdict (dict): A dictionary containing flags and sequence information, including HA genotype and clade.
-    samples_p (str): The path to the directory containing the sample FASTA file.
-    filename (str): The name of the FASTA file to be processed
-    genin_report (str): The path to the directory where the report files will be stored.
-    Returns:
-    None: This function does not return a value. It executes a system command to run GenIn2 and generate output files.
-    """
-    subprocess.run(['genin2','-o', genin_report, os.path.join(samples_p,f"{file_tag}_to_flumut.fasta")])
+    Run GenIn2 on the FluMut-formatted sample FASTA.
 
-def remap_genin2(reports_p, genin_report, mappings, flagsdict):
+    Parameters
+    ----------
+    samples_p : str
+        Directory containing ``{file_tag}_to_flumut.fasta``.
+    file_tag : str
+        Flat sample identifier used to build the input FASTA name.
+    genin_report : str
+        Output directory passed to GenIn2.
+
+    Returns
+    -------
+    None
+    """
+    _run_command(
+        ['genin2','-o', genin_report, os.path.join(samples_p,f"{file_tag}_to_flumut.fasta")],
+        'GenIn2',
+        sample_tag=file_tag,
+        expected_outputs=[genin_report],
+    )
+
+def remap_genin2(reports_p: str, genin_report: str, mappings: dict[str, str], flagsdict: dict) -> dict:
+    """
+    Rewrite GenIn2 sample names and store parsed constellation results.
+
+    Parameters
+    ----------
+    reports_p : str
+        Directory containing the GenIn2 report.
+    genin_report : str
+        Filename of the GenIn2 TSV report.
+    mappings : dict
+        Mapping from internal FASTA identifiers to original sequence headers.
+    flagsdict : dict
+        Pipeline state dictionary updated with parsed GenIn2 genotype data.
+
+    Returns
+    -------
+    dict
+        The updated ``flagsdict``.
+
+    Notes
+    -----
+    The input report is rewritten in place after sample names are remapped.
+    """
     genin_path = os.path.join(reports_p, genin_report)
     genin_df = pd.read_table(genin_path, index_col=False)
 
@@ -1072,7 +1502,15 @@ def remap_genin2(reports_p, genin_report, mappings, flagsdict):
 
 
 #### MAIN
-def parser():
+def parser() -> argparse.Namespace:
+    """
+    Parse command-line arguments for the main pipeline entry point.
+
+    Returns
+    -------
+    argparse.Namespace
+        Parsed command-line options for the AFluID pipeline.
+    """
     parser = argparse.ArgumentParser(
         prog='AFluID',
         description='AFluID: Automated Influenza Identification Pipeline'
@@ -1130,15 +1568,34 @@ def make_output_stem(filename: str, batch: bool = False, batch_dir: str = '', ti
         PT_A_H5N1_SAMPLE_01_IRMA
 
     Batch mode:
-        H5N1_IRMA_20260420_161518_PT_A_H5N1_SAMPLE_01_IRMA
+        H5N1_IRMA_20260420_161518_PT_A_H5N1_SAMPLE_01_IRMA_a1b2c3d4e5
     """
     sample_stem = make_sample_stem(filename)
 
     if batch:
         run_prefix = make_run_prefix(batch_dir=batch_dir, timestamp=timestamp)
-        return f"{run_prefix}_{sample_stem}"
+        sample_tag = make_batch_sample_tag(filename)
+        return f"{run_prefix}_{sample_tag}"
 
     return sample_stem
+
+
+def make_batch_sample_tag(filename: str, suffix_len: int = 10) -> str:
+    """
+    Build a readable per-sample batch tag.
+
+    Files directly under ``samples/`` keep their basename. Files inside
+    subdirectories append a short deterministic suffix derived from the
+    relative parent path.
+    """
+    sample_stem = make_sample_stem(filename)
+    parent = str(Path(filename).parent)
+
+    if parent in ('', '.'):
+        return sample_stem
+
+    suffix = hashlib.sha1(parent.encode('utf-8')).hexdigest()[:suffix_len]
+    return f"{sample_stem}_{suffix}"
 
 
 def make_file_tag(filename: str) -> str:
@@ -1155,7 +1612,7 @@ def make_file_tag(filename: str) -> str:
     return str(no_suffix).replace(os.sep, "__")
 
 
-def find_fasta_files(samples_p: str, batch_dir: str = '', recursive: bool = True):
+def find_fasta_files(samples_p: str, batch_dir: str = '', recursive: bool = True) -> list[str]:
     """
     Discover FASTA files inside samples_p or inside a given subdirectory of samples_p.
 
@@ -1199,10 +1656,45 @@ def find_fasta_files(samples_p: str, batch_dir: str = '', recursive: bool = True
     relpaths = [str(p.relative_to(samples_root)) for p in found if p.is_file()]
     return sorted(set(relpaths))
 
+
+def resolve_single_sample_file(samples_p: str, filename: str) -> str:
+    """
+    Resolve a single requested FASTA file inside ``samples_p``.
+
+    The input may be a relative path under ``samples/`` or a basename that is
+    unique somewhere under that tree. The resolved return value is always a
+    relative path from ``samples_p``.
+    """
+    requested = Path(filename)
+    samples_root = Path(samples_p).resolve()
+    direct = (samples_root / requested).resolve()
+
+    if direct.exists() and direct.is_file():
+        return str(direct.relative_to(samples_root))
+
+    matches = sorted(
+        p.relative_to(samples_root)
+        for p in samples_root.rglob(requested.name)
+        if p.is_file()
+    )
+
+    if not matches:
+        raise FileNotFoundError(
+            f"No sample file found under samples/ matching '{filename}'"
+        )
+
+    if len(matches) > 1:
+        match_list = ', '.join(str(match) for match in matches)
+        raise ValueError(
+            f"Ambiguous sample filename '{filename}'. Matches: {match_list}"
+        )
+
+    return str(matches[0])
+
 def run_pipeline_for_file(
     filename: str,
     flags_template: dict,
-    config,
+    config: configparser.ConfigParser,
     samples_p: str,
     runs_p: str,
     references_p: str,
@@ -1214,8 +1706,8 @@ def run_pipeline_for_file(
     mode: str,
     single: bool,
     update_flumut: str,
-    off_apps,
-    force_apps,
+    off_apps: list[str] | None,
+    force_apps: list[str] | None,
     rm_previous: bool,
     max_len: int,
     min_len: int,
@@ -1223,7 +1715,7 @@ def run_pipeline_for_file(
     batch: bool = False,
     batch_dir: str = '',
     timestamp: str = ''
-):
+) -> None:
     """
     Run full AFluID pipeline for one FASTA file.
 
@@ -1284,16 +1776,12 @@ def run_pipeline_for_file(
     print('Min sequence length:', min_len)
     print('Skip CD-HIT:', skip_cdhit)
 
-    sample_stem = Path(filename).stem
-
-    if batch:
-        batch_label = batch_dir.strip().replace(os.sep, "_").replace("/", "_") if batch_dir else "batch"
-        if timestamp:
-            output_tag = f"{batch_label}_{timestamp}_{sample_stem}"
-        else:
-            output_tag = f"{batch_label}_{sample_stem}"
-    else:
-        output_tag = sample_stem
+    output_tag = make_output_stem(
+        filename,
+        batch=batch,
+        batch_dir=batch_dir,
+        timestamp=timestamp,
+    )
 
     print('Output tag:', output_tag)
 
@@ -1304,16 +1792,30 @@ def run_pipeline_for_file(
     if mode == 'contig' and single:
         preprocess_min = contig_single_min_floor_bp
 
-    mappings = fasta_preprocess(
-        filename,
-        samples_p,
-        runs_p,
-        output_tag,
-        preprocess_min,
-        max_len,
-        flags,
-        verbose=True
-    )
+    try:
+        mappings = fasta_preprocess(
+            filename,
+            samples_p,
+            runs_p,
+            output_tag,
+            preprocess_min,
+            max_len,
+            flags,
+            verbose=True
+        )
+    except Exception as exc:
+        _set_tool_status(flags, 'preprocess', 'failed', str(exc))
+        _write_flags_json(reports_p, output_tag, flags)
+        raise
+
+    if not mappings:
+        raise ValueError(
+            f'No sequences remained after preprocessing for {filename}. '
+            'Adjust the sequence length thresholds or inspect the input FASTA.'
+        )
+
+    _require_files([formatted_fasta_fp], 'FASTA preprocessing did not produce the formatted sample FASTA')
+    _set_tool_status(flags, 'preprocess', 'completed')
 
     threads = int(config['blast']['num_threads'])
     num_seqs = int(config['blast']['max_target_seqs'])
@@ -1321,6 +1823,7 @@ def run_pipeline_for_file(
     if skip_cdhit:
         cluster_report = {}
         flags['Master']['C_BLAST'] = True
+        _set_tool_status(flags, 'cd_hit', 'skipped', 'Pipeline was run with --skip_cdhit')
         blast_cluster = bclust(
             clusters_p,
             config["Filenames"]["cluster_metadata"],
@@ -1377,11 +1880,16 @@ def run_pipeline_for_file(
             log_tag=output_tag,
             verbose=True
         )
+        _set_tool_status(flags, 'cd_hit', 'completed')
 
         assignments = cluster_assign(
             f'format_{output_tag}.clstr',
             formatted_fasta_fp,
             runs_p
+        )
+        _require_files(
+            [os.path.join(runs_p, f'format_{output_tag}.clstr'), os.path.join(runs_p, f'format_{output_tag}.assign')],
+            'CD-HIT clustering did not produce the expected assignment artifacts'
         )
 
         dict_cluster = json_load(os.path.join(clusters_p, config["Filenames"]["cluster_pkl"]))
@@ -1453,8 +1961,10 @@ def run_pipeline_for_file(
                 flags
             )
 
+    id_report_fp = os.path.join(reports_p, f"{output_tag}_ID_Report.txt")
+    _require_files([id_report_fp], 'Pipeline identification path did not produce the ID report')
+
     if mode == 'contig' and single:
-        id_report_fp = os.path.join(reports_p, f"{output_tag}_ID_Report.txt")
         best_segments, min_used = compute_best_segments_iterative(
             id_report_fp,
             formatted_fasta_fp,
@@ -1480,41 +1990,64 @@ def run_pipeline_for_file(
         single_sample=single
     )
 
+    _set_tool_status(flags, 'flumut', 'skipped', 'FluMut routing not enabled for this sample')
     if flags['Master']['flumut']:
-        conform_to_flumut(flags, runs_p, output_tag)
-        if update_flumut.upper() == 'ON':
-            update_flumut_db()
-        run_flumut(reports_p, runs_p, output_tag)
-        remap_flumut_report(reports_p, mappings, output_tag)
-        mut_miner(os.path.join(reports_p, f'{output_tag}_markers.tsv'), muts_of_interest, flags)
+        try:
+            flumut_input_fp = os.path.join(runs_p, f'{output_tag}_to_flumut.fasta')
+            markers_fp = os.path.join(reports_p, f'{output_tag}_markers.tsv')
+            mutations_fp = os.path.join(reports_p, f'{output_tag}_mutations.tsv')
+            conform_to_flumut(flags, runs_p, output_tag)
+            _require_files([flumut_input_fp], 'FluMut preparation did not produce the expected input FASTA')
+            if update_flumut.upper() == 'ON':
+                update_flumut_db()
+            run_flumut(reports_p, runs_p, output_tag)
+            _require_files([markers_fp, mutations_fp], 'FluMut did not produce the expected report files')
+            remap_flumut_report(reports_p, mappings, output_tag)
+            mut_miner(markers_fp, muts_of_interest, flags)
+            _set_tool_status(flags, 'flumut', 'completed')
+        except Exception as exc:
+            flags['Master']['flumut'] = False
+            flags['Final Report']['Sequences for FluMut'] = []
+            flags['Final Report']['Sequences for GenIn'] = []
+            _set_tool_status(flags, 'flumut', 'failed', str(exc))
+            print(f'Warning: skipping FluMut for {output_tag}: {exc}')
 
+    _set_tool_status(flags, 'nextclade', 'skipped', 'Nextclade routing not enabled for this sample')
     if flags['Master']['nextclade']:
-        fasta_to_nextclade(flags, runs_p, output_tag)
-        run_nextclade(f'{output_tag}_to_nextclade', flags, reports_p, runs_p, output_tag)
+        try:
+            fasta_to_nextclade(flags, runs_p, output_tag)
+            run_nextclade(f'{output_tag}_to_nextclade', flags, reports_p, runs_p, output_tag)
 
-        if flags['Final Report']['Sequences for NextClade']['H1'] != []:
-            remap_nextclade(reports_p, f"{output_tag}_H1_nextclade.tsv", mappings)
-            flags['Sample']['clade'] = mine_clade(
-                os.path.join(reports_p, f"{output_tag}_H1_nextclade.tsv"),
-                flags,
-                mappings
-            )
+            if flags['Final Report']['Sequences for NextClade']['H1'] != []:
+                remap_nextclade(reports_p, f"{output_tag}_H1_nextclade.tsv", mappings)
+                flags['Sample']['clade'] = mine_clade(
+                    os.path.join(reports_p, f"{output_tag}_H1_nextclade.tsv"),
+                    flags,
+                    mappings
+                )
 
-        if flags['Final Report']['Sequences for NextClade']['H3'] != []:
-            remap_nextclade(reports_p, f"{output_tag}_H3_nextclade.tsv", mappings)
-            flags['Sample']['clade'] = mine_clade(
-                os.path.join(reports_p, f"{output_tag}_H3_nextclade.tsv"),
-                flags,
-                mappings
-            )
+            if flags['Final Report']['Sequences for NextClade']['H3'] != []:
+                remap_nextclade(reports_p, f"{output_tag}_H3_nextclade.tsv", mappings)
+                flags['Sample']['clade'] = mine_clade(
+                    os.path.join(reports_p, f"{output_tag}_H3_nextclade.tsv"),
+                    flags,
+                    mappings
+                )
 
-        if flags['Final Report']['Sequences for NextClade']['H5'] != []:
-            remap_nextclade(reports_p, f"{output_tag}_H5_nextclade.tsv", mappings)
-            flags['Sample']['clade'] = mine_clade(
-                os.path.join(reports_p, f"{output_tag}_H5_nextclade.tsv"),
-                flags,
-                mappings
-            )
+            if flags['Final Report']['Sequences for NextClade']['H5'] != []:
+                remap_nextclade(reports_p, f"{output_tag}_H5_nextclade.tsv", mappings)
+                flags['Sample']['clade'] = mine_clade(
+                    os.path.join(reports_p, f"{output_tag}_H5_nextclade.tsv"),
+                    flags,
+                    mappings
+                )
+            _set_tool_status(flags, 'nextclade', 'completed')
+        except Exception as exc:
+            flags['Master']['nextclade'] = False
+            flags['Sample']['clade'] = ''
+            flags['Final Report']['Sequences for NextClade'] = {'H1': [], 'H3': [], 'H5': []}
+            _set_tool_status(flags, 'nextclade', 'failed', str(exc))
+            print(f'Warning: skipping Nextclade for {output_tag}: {exc}')
 
     if flags['Master']['getref']:
         get_reference(
@@ -1541,31 +2074,52 @@ def run_pipeline_for_file(
     else:
         flags['Final Report']['Sequences for GenIn'] = []
 
+    _set_tool_status(flags, 'genin', 'skipped', 'GenIn2 routing not enabled for this sample')
     if flags['Master']['genin']:
-        run_genin2(runs_p, output_tag, os.path.join(reports_p, f'{output_tag}_genin.tsv'))
-        remap_genin2(reports_p, f'{output_tag}_genin.tsv', mappings, flags)
+        try:
+            genin_fp = os.path.join(reports_p, f'{output_tag}_genin.tsv')
+            _require_files([os.path.join(runs_p, f'{output_tag}_to_flumut.fasta')], 'GenIn2 requires the FluMut-formatted FASTA input')
+            run_genin2(runs_p, output_tag, genin_fp)
+            _require_files([genin_fp], 'GenIn2 did not produce the expected report file')
+            remap_genin2(reports_p, f'{output_tag}_genin.tsv', mappings, flags)
+            _set_tool_status(flags, 'genin', 'completed')
+        except Exception as exc:
+            flags['Master']['genin'] = False
+            flags['Final Report']['Sequences for GenIn'] = []
+            flags['Sample']['Genin_genotypes'] = {}
+            _set_tool_status(flags, 'genin', 'failed', str(exc))
+            print(f'Warning: skipping GenIn2 for {output_tag}: {exc}')
+
+    _write_flags_json(reports_p, output_tag, flags)
 
     if mode == 'consensus':
-        generate_final_report(
-            os.path.join(reports_p, f"{output_tag}_ID_Report.txt"),
-            flags,
-            seg_lens,
-            mappings,
-            muts_loci_meaning,
-            html_skeleton,
-            os.path.join(reports_p, f'{output_tag}_final_report.html'),
-            f'{output_tag}_final_report',
-            runs_p=runs_p
-            )
-        with open(os.path.join(reports_p, f'{output_tag}_flags.json'), 'w') as f:
-            json.dump(flags, f)
+        _require_files([id_report_fp], 'Final report generation requires the ID report')
+        try:
+            generate_final_report(
+                id_report_fp,
+                flags,
+                seg_lens,
+                mappings,
+                muts_loci_meaning,
+                html_skeleton,
+                os.path.join(reports_p, f'{output_tag}_final_report.html'),
+                f'{output_tag}_final_report',
+                runs_p=runs_p
+                )
+            _set_tool_status(flags, 'final_report', 'completed')
+        except Exception as exc:
+            _set_tool_status(flags, 'final_report', 'failed', str(exc))
+            _write_flags_json(reports_p, output_tag, flags)
+            raise
+        _write_flags_json(reports_p, output_tag, flags)
 
-        print(f'Finished: {filename}')
-        return {
-            'flags': flags,
-            'output_tag': output_tag
-        }
-def main(flagdict=flagdict):
+    print(f'Finished: {filename}')
+    return {
+        'flags': flags,
+        'output_tag': output_tag,
+        'mode': mode,
+    }
+def main(flagdict: dict = flagdict) -> None:
     """Main entry point for the pipeline."""
     args = parser()
     cwd = os.getcwd()
@@ -1715,6 +2269,11 @@ def main(flagdict=flagdict):
                     timestamp=timestamp
                 )
 
+                if not isinstance(result, dict) or 'output_tag' not in result:
+                    raise RuntimeError(
+                        f"Pipeline completed without returning output metadata for {fasta_file}"
+                    )
+
                 results.append({
                     'input_file': fasta_file,
                     'file_tag': result['output_tag'],
@@ -1726,8 +2285,12 @@ def main(flagdict=flagdict):
                 print(f"ERROR processing {fasta_file}: {e}")
                 failures.append((fasta_file, str(e)))
 
-                sample_stem = Path(fasta_file).stem
-                failed_tag = f"{batch_label}_{timestamp}_{sample_stem}"
+                failed_tag = make_output_stem(
+                    fasta_file,
+                    batch=True,
+                    batch_dir=batch_label,
+                    timestamp=timestamp,
+                )
 
                 results.append({
                     'input_file': fasta_file,
@@ -1760,8 +2323,14 @@ def main(flagdict=flagdict):
         return
 
     # Single-file mode
+    try:
+        resolved_filename = resolve_single_sample_file(samples_p, args.filename)
+    except Exception as e:
+        print(f"Could not resolve sample file: {e}")
+        sys.exit(1)
+
     run_pipeline_for_file(
-        filename=args.filename,
+        filename=resolved_filename,
         flags_template=flagdict,
         config=config,
         samples_p=samples_p,

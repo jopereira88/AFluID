@@ -6,14 +6,24 @@ import json
 import random
 import os
 import shutil
+from typing import Any, Iterable, Optional
 from structures import segment_syns, iupac_nucleotides
 import pandas as pd
 
-def strains_get(filename):
-    '''Collects accession numbers from a multifasta
-    Accepts: filename - a string for the path of the fasta file
-    Returns: A list of accession numbers
-    Raises: FileNotFoundError if the path is wrong'''
+def strains_get(filename: str) -> list[str]:
+    """
+    Collect strain descriptors from a multi-FASTA file.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the FASTA file.
+
+    Returns
+    -------
+    list
+        Unique strain descriptors matched from FASTA headers.
+    """
     strains=set()
     with open(filename,'r') as fasta:
         for line in fasta.readlines():
@@ -24,13 +34,22 @@ def strains_get(filename):
                     strains.add(ex.group())
     return list(strains)
 
-def acess_get(strainlist, filename):
-    '''Gets accession numbers from a list of strain names
-    Accepts: strainlist - a list
-    filename - a string (path to multifasta file)
-    Returns: a dictionary with strain name as key and a list of accession
-    numbers corresponding to that strain
-    Raises: FileNotFoundError if the path is wrong'''
+def acess_get(strainlist: Iterable[str], filename: str) -> dict[str, list[str]]:
+    """
+    Collect accession numbers for selected strain names.
+
+    Parameters
+    ----------
+    strainlist : list
+        Strain names to search for.
+    filename : str
+        Path to the FASTA file.
+
+    Returns
+    -------
+    dict
+        Mapping from strain name to matching accession prefixes.
+    """
     strain_seg={}
     for strain in strainlist:
         strain_seg[strain]=[]       #primes dict to recieve accessions
@@ -42,11 +61,26 @@ def acess_get(strainlist, filename):
 
     return strain_seg
 
-def seq_get(filename):
-    '''Parses fasta file and returns accession numbers and sequences
-    Accepts: filename -  a string for the path of the fasta file
-    Returns: a dictonary with accession number and sequence
-    Raises:FileNotFoundError if file path is wrong'''
+def seq_get(filename: str) -> dict[str, str]:
+    """
+    Parse a FASTA file into a header-to-sequence mapping.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the FASTA file.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping normalized FASTA headers to uppercase nucleotide
+        sequences.
+
+    Notes
+    -----
+    Sequences are normalized by removing ``-``, replacing ``X`` with ``N``,
+    converting ``U`` to ``T``, and replacing non-IUPAC characters with ``N``.
+    """
     seqs={}
     with open(filename,'r') as file:
         fasta=file.readlines()
@@ -66,12 +100,22 @@ def seq_get(filename):
 
 
 
-def seq_filter_get(filename,values):
-    '''Parses fasta file and returns accession numbers and sequences
-    Accepts: filename -  a string for the path of the fasta file
-    values - an iterable with accession numbers or strains
-    Returns: a dictonary with accession number and sequence
-    Raises:FileNotFoundError if file path is wrong'''
+def seq_filter_get(filename: str,values: Iterable[str]) -> dict[str, str]:
+    """
+    Parse a FASTA file and keep only headers matching selected values.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the FASTA file.
+    values : iterable
+        Substrings to match against FASTA headers.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping matching FASTA headers to their sequences.
+    """
     seqs={}
     seqsf={}
     with open(filename,'r') as file:
@@ -88,37 +132,57 @@ def seq_filter_get(filename,values):
                 seqsf[key]=seqs[key]
     return seqsf
 
-def remove_seq_from_fasta(filename, output_path, access: list):
+def remove_seq_from_fasta(filename: str, output_path: str, access: list[str]) -> None:
     """
-    Remove sequences from a FASTA file based on a list of accession numbers using BioPython.
+    Remove sequences from a FASTA file by accession.
 
-    Parameters:
-        filename (str): Path to the input FASTA file.
-        output_path (str): Path to the output FASTA file.
-        accession_to_remove (list): List of accession numbers to remove.
+    Parameters
+    ----------
+    filename : str
+        Path to the input FASTA file.
+    output_path : str
+        Path to the output FASTA file.
+    access : list
+        Accession numbers to remove.
 
-    Returns:
-        None
+    Returns
+    -------
+    None
     """
     sequences = SeqIO.parse(filename,"fasta")
     filtered_sequences= (seq for seq in sequences if seq.id not in access)
     SeqIO.write(filtered_sequences, output_path, "fasta")
 
-def sp_blastn(query,db,outputname='results',outputformat='6',remote=False,createdb=True, maxtargetseqs=1,silent=False, numthreads=1):
-    '''Creates a blast db from a nucleotide fasta file and runs a 
-    blastn of a query sequence against the db
-    Requires: ncbi-blast+ installed locally
-    Accepts: query (string)- path to a .fasta file of the test sequence
-    db (string)- filename of a multifasta file of sequences to target 
-    that should be in the current working directory
-    outputname (string)- name of the output file. (default- results)
-    outputformat (string)- type of outformat (default- 6)
-    remote(bool) - use with db=nt for blast against NCBI
-    createdb(bool) -use to create a local blastDB from a fasta file
-    maxtargetseqs(int) - default=1 max aligned seqs
-    numthreads(int) - default=1 number of cpu threads
-    Returns: .txt file and contents printed to stdout 
-    '''
+def sp_blastn(query: str,db: str,outputname: str = 'results',outputformat: str = '6',remote: bool = False,createdb: bool = True, maxtargetseqs: int = 1,silent: bool = False, numthreads: int = 1) -> None:
+    """
+    Run `blastn` against a local or remote nucleotide database.
+
+    Parameters
+    ----------
+    query : str
+        Path to the query FASTA file.
+    db : str
+        FASTA file used to build a local database, or an existing remote
+        database name.
+    outputname : str, default 'results'
+        Output file stem for the BLAST results.
+    outputformat : str, default '6'
+        BLAST output format code.
+    remote : bool, default False
+        Whether to query a remote BLAST database.
+    createdb : bool, default True
+        Whether to create a local BLAST database from ``db``.
+    maxtargetseqs : int, default 1
+        Maximum number of aligned target sequences.
+    silent : bool, default False
+        Whether to suppress printing the result file contents.
+    numthreads : int, default 1
+        Number of CPU threads to pass to BLAST.
+
+    Returns
+    -------
+    None
+    """
     dbname=db.split('.')[0]
     if createdb:
         subprocess.run(["makeblastdb", "-in", db, "-dbtype", "nucl", "-out",\
@@ -133,28 +197,55 @@ def sp_blastn(query,db,outputname='results',outputformat='6',remote=False,create
         with open(f"{outputname}.txt") as results_file:
             print(results_file.read())
 
-def query_seqs(seqdict,access):
-    '''Queries a sequence dictionary for the key with an accession number
-    accepts: seqdict(dictionary) - dictionary of fasta header as key and 
-    sequence as value
-    access(str) - accession number
-    prints header to stdout'''
+def query_seqs(seqdict: dict[str, str],access: str) -> None:
+    """
+    Print FASTA headers containing a selected accession token.
+
+    Parameters
+    ----------
+    seqdict : dict
+        Mapping from FASTA headers to sequences.
+    access : str
+        Accession token to search for.
+
+    Returns
+    -------
+    None
+    """
     for key in seqdict:
         if access in key:
             print(key)
 
-def to_subprocess(command):
-    '''Transforms a string into a subprocess list
-    Accepts: command - a string
-    Returns: subprocess list - A list
-    '''
+def to_subprocess(command: str) -> list[str]:
+    """
+    Split a shell-like command string into subprocess arguments.
+
+    Parameters
+    ----------
+    command : str
+        Command string to split on spaces.
+
+    Returns
+    -------
+    list
+        Tokenized subprocess argument list.
+    """
     subprocess=command.split(' ')
     return subprocess
 
-def sp_grep(command):
-    '''Uses subprocess module to launch grep
-    Accepts: command(str) command without grep
-    Returns: prints results to stdout'''
+def sp_grep(command: str) -> None:
+    """
+    Run `grep` via `subprocess`.
+
+    Parameters
+    ----------
+    command : str
+        Grep arguments, with or without the leading ``grep`` token.
+
+    Returns
+    -------
+    None
+    """
     cmd=to_subprocess(command)
     greplist=['grep']
     if 'grep' not in cmd:
@@ -163,12 +254,22 @@ def sp_grep(command):
     else:
         subprocess.run(cmd)
 
-def filter_seq(seq_dict, query):
-    '''Filters dictionary items by substring in key
-    Accepts: seq_dict (dict)
-    pattern(iterable)
-    Returns: filtered dictionary
-    '''
+def filter_seq(seq_dict: dict[str, str], query: Iterable[str]) -> dict[str, str]:
+    """
+    Filter sequence dictionary entries by header substring.
+
+    Parameters
+    ----------
+    seq_dict : dict
+        Mapping from FASTA headers to sequences.
+    query : iterable
+        Substrings to match against each header.
+
+    Returns
+    -------
+    dict
+        Filtered dictionary containing matching entries.
+    """
     filtered={}
     for key in seq_dict:
         for value in query:
@@ -176,11 +277,21 @@ def filter_seq(seq_dict, query):
                 filtered[key]=seq_dict[key]
     return filtered
 
-def concat_fasta(flist,outname):
-    '''concatenates a list of fasta files and outputs a multifasta file
-    Accepts: flist(list) - list of .fasta files
-    outname(str) - name of the output fasta file
-    Returns: fasta file'''
+def concat_fasta(flist: list[str],outname: str) -> None:
+    """
+    Concatenate several FASTA files into one multi-FASTA file.
+
+    Parameters
+    ----------
+    flist : list
+        FASTA file paths to merge.
+    outname : str
+        Output file stem.
+
+    Returns
+    -------
+    None
+    """
     seqs={}
     for i in flist:
         with open(i,'r') as file:
@@ -195,7 +306,7 @@ def concat_fasta(flist,outname):
         for key, value in seqs.items():
             output.write(f'{key}\n{value}\n')
 
-def dict_to_fasta(seqs,outname:str):
+def dict_to_fasta(seqs: dict[str, str],outname:str) -> None:
     """
     Converts a dictionary into a FASTA file.
 
@@ -215,14 +326,23 @@ def dict_to_fasta(seqs,outname:str):
         for key, value in seqs.items():
             output.write(f'{key}\n{value}\n')
 
-def fasta_splitter(inputfile,outfile,batch_size=8):
-    '''Requires Biopython
-    Splits a multifasta file into smaller files with 
-    batch_size sequences
-    Accepts: inputfile(str) - path to fasta file
-    outfile(str): name of output files 
-    batch_size (int) number of sequences per fasta
-    Returns: len(inputfile)//batch_size fasta files'''
+def fasta_splitter(inputfile: str,outfile: str,batch_size: int = 8) -> None:
+    """
+    Split a multi-FASTA file into smaller FASTA batches.
+
+    Parameters
+    ----------
+    inputfile : str
+        Path to the input FASTA file.
+    outfile : str
+        Output file stem.
+    batch_size : int, default 8
+        Number of sequences per output FASTA file.
+
+    Returns
+    -------
+    None
+    """
     
     fasta = SeqIO.parse(inputfile, "fasta")
     counter=1
@@ -241,11 +361,23 @@ def fasta_splitter(inputfile,outfile,batch_size=8):
         SeqIO.write(seq_batch, out, "fasta")
         print(f"Written {len(seq_batch)} sequences to {out}")
 
-def parse_clstr(filename, access_only=True):
-    '''parses a .clstr file and retrieves the accessions within each cluster
-    Accepts: filename(str) path to the clstr file
-    access_only (bool) True for accession only, false for the entire row
-    Returns: clusters(dict)'''
+def parse_clstr(filename: str, access_only: bool = True) -> dict[str, list[str]]:
+    """
+    Parse a CD-HIT ``.clstr`` file.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the ``.clstr`` file.
+    access_only : bool, default True
+        Whether to keep only accession identifiers instead of the raw cluster
+        lines.
+
+    Returns
+    -------
+    dict
+        Mapping from cluster label to member accessions or raw entries.
+    """
     clusters = {}
     current_cluster = None
 
@@ -266,28 +398,24 @@ def parse_clstr(filename, access_only=True):
                     clusters[current_cluster].append(line)
     return clusters
 
-def metadata_dict(filepath,col_list,sep=','):
-    '''generates a metadata dict from a metadata file with
-    key=accession number; value=list of metadata columns
-    cols, in flu_metadata.csv:
-    0=Accession
-    1=Organism_Name
-    2=GenBank_RefSeq
-    3=Assembly
-    4=Release_Date
-    5=Isolate
-    6=Species
-    7=Length
-    8=Nuc_Completeness
-    9=Genotype
-    10=Segment
-    11=Country
-    12=Host
-    13=Collection_Date
-    
-    Accepts: filepath(str) - path to metadata file
-    col_list(list) - list of column indexes to mine
-    Returns: dict - a metadata dictionary  '''
+def metadata_dict(filepath: str,col_list: list[int],sep: str = ',') -> dict[str, list[str]]:
+    """
+    Build a lookup dictionary from a delimited metadata table.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the metadata file.
+    col_list : list
+        Column indexes to extract for each accession.
+    sep : str, default ","
+        Field delimiter used in the metadata file.
+
+    Returns
+    -------
+    dict
+        Dictionary keyed by accession with a list of selected column values.
+    """
 
     #Primes dict
     dict={}
@@ -304,32 +432,59 @@ def metadata_dict(filepath,col_list,sep=','):
 
     return dict
 
-def json_save(object,filename):
-    """Saves an object into a json file
-    Accepts: object(any) - Python object to store
-    filename(str) - Path to the output filename w/o .json extension
-    Outputs: .json file"""
+def json_save(object: Any,filename: str) -> None:
+    """
+    Save a Python object as JSON.
+
+    Parameters
+    ----------
+    object : Any
+        Python object to serialize.
+    filename : str
+        Output filename stem without the ``.json`` extension.
+
+    Returns
+    -------
+    None
+    """
     
     with open(f'{filename}.json','w') as save:
         json.dump(object,save)
     
-def json_load(filename):
-    """Loads an object from a json file
-    Accepts: filename(str) - Path to the output filename (MUST INCLUDE .json)
-    Outputs: python object"""
+def json_load(filename: str) -> Any:
+    """
+    Load a Python object from a JSON file.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the JSON file.
+
+    Returns
+    -------
+    Any
+        Deserialized Python object.
+    """
     
     with open(filename,'r') as bin:
         object=json.load(bin)
     
     return object
 
-def merge_fasta(input_files, output_file):
+def merge_fasta(input_files: list[str], output_file: str) -> None:
     """
-    Merges multiple FASTA files into one.
-    REQUIRES: Biopython
+    Merge multiple FASTA files into one.
 
-    Accepts: input_files(list): paths to input FASTA files
-    output_file (str): Path to the output FASTA file
+    Parameters
+    ----------
+    input_files : list
+        Paths to the input FASTA files.
+    output_file : str
+        Path to the merged output FASTA file.
+
+    Returns
+    -------
+    None
     """
     with open(output_file, "w") as outfile:
         for input_file in input_files:
@@ -339,13 +494,22 @@ def merge_fasta(input_files, output_file):
 
     print(f"Merged {len(input_files)} files into {output_file}")
 
-def extract_random_sequences(input:str, output:str, seqs:int ):
+def extract_random_sequences(input:str, output:str, seqs:int ) -> None:
     """
-    Extracts a subset of random sequences from a FASTA file.
+    Extract a random subset of sequences from a FASTA file.
 
-    Accepts:input(str) - Path to the input FASTA file
-    output(str) - Path to the output FASTA file
-    seqs (int): Number of random sequences to extract
+    Parameters
+    ----------
+    input : str
+        Path to the input FASTA file.
+    output : str
+        Path to the output FASTA file.
+    seqs : int
+        Number of sequences to sample.
+
+    Returns
+    -------
+    None
     """
     # Creates a list for all the seqs in the fasta file
     sequences = list(SeqIO.parse(input, "fasta"))
@@ -364,12 +528,21 @@ def extract_random_sequences(input:str, output:str, seqs:int ):
     
     print(f"Extracted {seqs} random sequences to {output}")
 
-def concat_tabular(file_list,output_file):
-    '''concatenates a list of tabular files with the same structure
-    into a single tabular file, rejecting repeated lines
-    Accepts: file_list(list) - list of paths to .txt tabular files
-    output_file (str) - path to output file
-    Outputs: concatentated tabular file (output_file_path_concat.txt)'''
+def concat_tabular(file_list: list[str],output_file: str) -> None:
+    """
+    Concatenate tabular files with duplicate row removal.
+
+    Parameters
+    ----------
+    file_list : list
+        Paths to tabular files with the same header structure.
+    output_file : str
+        Path to the concatenated output file.
+
+    Returns
+    -------
+    None
+    """
     concatenated=set()
     #mining header
     header=open(file_list[0],'r').readlines()
@@ -395,13 +568,24 @@ def concat_tabular(file_list,output_file):
         for line in outlist:
             output.write(line)
 
-def headers_from_mult_fas(fasta_list,only_name=False,out_list=False):
-    '''queries fasta for headers and returns dict: 
-    {Accesion:Name,...} if only_name==False
-    {Accession:Name} if only_name == True
-    Accepts: fasta(str - path to fasta file)
-    only_name (bool): default=False
-    Returns: headers (dict) '''
+def headers_from_mult_fas(fasta_list: list[str],only_name: bool = False,out_list: bool = False) -> dict[str, list[str]] | list[str]:
+    """
+    Extract headers from one or more FASTA files.
+
+    Parameters
+    ----------
+    fasta_list : list
+        FASTA file paths to inspect.
+    only_name : bool, default False
+        Whether to return only normalized accession names.
+    out_list : bool, default False
+        Whether to return a list instead of a dictionary.
+
+    Returns
+    -------
+    dict or list
+        Header information in the requested representation.
+    """
     if not only_name and not out_list:
         headers={}
     elif not only_name and out_list:
@@ -437,11 +621,20 @@ def headers_from_mult_fas(fasta_list,only_name=False,out_list=False):
                         headers.append(header[0])
     return headers
 
-def mine_headers(header_dict):
-    '''Mines a dictionary from fasta headers to extract segment
-    and genotype.
-    Accepts: header_dict (dict) - a dictionary of fasta accession number: header.
-    Returns: gen_seg (dict) - a dictionary of accession number: [genotype, segment].'''
+def mine_headers(header_dict: dict[str, str]) -> dict[str, list[str]]:
+    """
+    Infer genotype and segment values from FASTA headers.
+
+    Parameters
+    ----------
+    header_dict : dict
+        Mapping from accession identifiers to FASTA header strings.
+
+    Returns
+    -------
+    dict
+        Mapping from accession identifier to ``[genotype, segment]``.
+    """
     
     gen_seg = {}
     
@@ -487,15 +680,29 @@ def mine_headers(header_dict):
                 
     return gen_seg
 
-def input_missing_gen_seq(dataframe, dictionary,keydfname,value1dfname,value2=False,value2dfname=None):
-    '''Inputs up to 2 missing values into a data frame (REQUIRES PANDAS)
-    Accepts dictionary with key value that exist in the data_frame
-    dataframe - a pandas dataframe
-    keydfname(str) - name of the DF key column
-    value1dfname(str) - name of the DF value 1 column
-    value2(bool) - If there is a second value (default=False)
-    value2dfname(str) - name of the DF value 2 column
-    outputs updated dataframe'''
+def input_missing_gen_seq(dataframe: pd.DataFrame, dictionary: dict,keydfname: str,value1dfname: str,value2: bool = False,value2dfname: Optional[str] = None) -> None:
+    """
+    Fill missing dataframe values from a lookup dictionary.
+
+    Parameters
+    ----------
+    dataframe : pandas.DataFrame
+        Dataframe to update.
+    dictionary : dict
+        Lookup mapping keyed by dataframe identifiers.
+    keydfname : str
+        Name of the dataframe key column.
+    value1dfname : str
+        Name of the first dataframe column to fill.
+    value2 : bool, default False
+        Whether a second value should also be filled.
+    value2dfname : str, optional
+        Name of the second dataframe column to fill.
+
+    Returns
+    -------
+    None
+    """
     for idx, row in dataframe.iterrows():
         key = row['Accession']
     
@@ -508,14 +715,25 @@ def input_missing_gen_seq(dataframe, dictionary,keydfname,value1dfname,value2=Fa
                 if pd.isna(row['Segment']):
                     dataframe.loc[idx, 'Segment'] = dictionary[key][1]
 
-def dict_to_csv(values_dict,filename,header=[],sep=','):
-    '''writes to a csv file a dictionary with the 
-    row name as the row key and the other values as other 
-    columns
-    Acceptts: values_dict(a dictionary)
-    headers (list) - list of str with header names 
-    filename (str) - path and name of output file
-    Outputs: csv file'''
+def dict_to_csv(values_dict: dict[str, list[Any]],filename: str,header: Optional[list[str]] = [],sep: str = ',') -> None:
+    """
+    Write a dictionary of rows to a delimited text file.
+
+    Parameters
+    ----------
+    values_dict : dict
+        Mapping from row keys to row values.
+    filename : str
+        Output file path.
+    header : list, default []
+        Optional header row values.
+    sep : str, default ','
+        Output field delimiter.
+
+    Returns
+    -------
+    None
+    """
     with open(f'{filename}','w') as csv:
         if header != []:    
             for i in header:
@@ -527,14 +745,43 @@ def dict_to_csv(values_dict,filename,header=[],sep=','):
                 csv.write(f'{value}{sep}')
             csv.write('\n')
 
-def mine_segment(dict):
+def mine_segment(dict: dict[str, str]) -> dict[str, str]:
+    """
+    Infer segment numbers from header text.
+
+    Parameters
+    ----------
+    dict : dict
+        Mapping from accession or sequence identifiers to header strings.
+
+    Returns
+    -------
+    dict
+        Mapping from identifier to inferred segment number.
+    """
     mined={}
     for key,value in segment_syns.items():
         for access in dict.keys():
             for item in value:
                 if item.upper() in dict[access].upper():
                     mined[access]=key
-def mine_genotype_H(list_of_genotypes):
+    return mined
+
+def mine_genotype_H(list_of_genotypes: Iterable[str]) -> dict[str, list[str]]:
+    """
+    Extract HA subtype tokens from genotype labels.
+
+    Parameters
+    ----------
+    list_of_genotypes : iterable
+        Genotype strings such as ``H5N1`` or ``H5``.
+
+    Returns
+    -------
+    dict
+        Mapping from each input genotype string to the H subtypes recovered
+        from it.
+    """
     gen_patt=r'(H\d{1,2})(N\d{1,2})'
     part_h=r'H\d{1,2}'
     part_genos={gen:set() for gen in list_of_genotypes}
@@ -549,21 +796,64 @@ def mine_genotype_H(list_of_genotypes):
     for key in part_genos:
         part_genos[key]=list(part_genos[key])
     return part_genos
-def mine_single_HA(str):
+
+def mine_single_HA(str: str) -> str:
+    """
+    Extract a single HA subtype token from a genotype string.
+
+    Parameters
+    ----------
+    str : str
+        Genotype string to inspect.
+
+    Returns
+    -------
+    str
+        Matching ``H`` subtype token, or ``"UD"`` when none is found.
+    """
     part_h=r'H\d{1,2}'
     lookup_H=re.match(part_h,str)
     if lookup_H:
         return lookup_H.group()
     else:
         return 'UD'
-def mine_single_NA(str):
+
+def mine_single_NA(str: str) -> str:
+    """
+    Extract a single NA subtype token from a genotype string.
+
+    Parameters
+    ----------
+    str : str
+        Genotype string to inspect.
+
+    Returns
+    -------
+    str
+        Matching ``N`` subtype token, or ``"UD"`` when none is found.
+    """
     part_n=r'N\d{1,2}'
     lookup_N=re.match(part_n,str)
     if lookup_N:
         return lookup_N.group()
     else:
         return 'UD'
-def mine_genotype_N(list_of_genotypes):
+
+def mine_genotype_N(list_of_genotypes: Iterable[str]) -> dict[str, list[str]]:
+    """
+    Extract NA subtype tokens from genotype labels.
+
+    Parameters
+    ----------
+    list_of_genotypes : iterable
+        Genotype strings such as ``H5N1`` or ``N1``.
+
+    Returns
+    -------
+    dict
+        Mapping from each input genotype string to the N subtypes recovered
+        from it.
+    """
     gen_patt=r'(H\d{1,2})(N\d{1,2})'
     part_n=r'N\d{1,2}'
     part_genos={gen:set() for gen in list_of_genotypes}
@@ -579,22 +869,40 @@ def mine_genotype_N(list_of_genotypes):
         part_genos[key]=list(part_genos[key])
     return part_genos
 
-def int_to_iupac(value):
-    '''
-    Converts a segment integer value into the IUPAC acronym
-    Args: value(str or int) between 1 and 8
-    Returns: str - IUPAC acronym for the segment 
-    '''
+def int_to_iupac(value: str | int) -> Optional[str]:
+    """
+    Convert a segment number into its IUPAC segment acronym.
+
+    Parameters
+    ----------
+    value : str or int
+        Segment number between 1 and 8.
+
+    Returns
+    -------
+    str
+        IUPAC acronym for the segment.
+    """
     iupac={1:'PB2', 2: 'PB1', 3:'PA', 4:'HA', 5:'NP',6:'NA',7:'MP',8:'NS'}
     try:
         return iupac[int(value)]
     except KeyError:
         print(f"Invalid segment value: {value}, expected 1 to 8")
 
-def convert_to_prop(dict):
-    '''Converts a dictionary of counts into a dictionary of proportions
-    Accepts: dict(dict) - dictionary of counts
-    Returns: prop(dict) - dictionary of proportions'''
+def convert_to_prop(dict: dict[str, float]) -> dict[str, float]:
+    """
+    Convert count values into proportions.
+
+    Parameters
+    ----------
+    dict : dict
+        Dictionary of count values.
+
+    Returns
+    -------
+    dict
+        Dictionary of proportional values.
+    """
     prop={}
     total=sum(dict.values())
     for key in dict:
@@ -602,15 +910,19 @@ def convert_to_prop(dict):
     return prop
 
 
-def get_ncbi_accessions(fasta_file):
+def get_ncbi_accessions(fasta_file: str) -> set[str]:
     """
-    Parses a multi-FASTA file and extracts NCBI accession numbers from headers.
+    Extract NCBI accession numbers from FASTA headers.
 
-    Args:
-        fasta_file (str): Path to the FASTA file.
+    Parameters
+    ----------
+    fasta_file : str
+        Path to the FASTA file.
 
-    Returns:
-        set: A set of extracted NCBI accession numbers.
+    Returns
+    -------
+    set
+        Extracted accession numbers.
     """
     accessions = set()
     

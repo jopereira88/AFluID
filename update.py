@@ -16,10 +16,11 @@ import sys
 import glob
 import tarfile
 from datetime import datetime
+from typing import Any, Iterable
 from main import fasta_preprocess, cd_hit_est_2d, cluster_assign, cluster_compile, cluster_miner, bclust, reblast, report_compiler
 
 
-def update_ini_config(config_path, updates):
+def update_ini_config(config_path: str, updates: dict) -> None:
     """
     Update values in an INI configuration file.
 
@@ -55,14 +56,20 @@ def update_ini_config(config_path, updates):
 
 
 # Value normalization and transformation funcs
-def normalise_segments(dataframe):
-    '''
-    Converts Segment values to int
-    
-    :param dataframe: A NCBI virus metadata dataframe (pandas DataFrame)
+def normalise_segments(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert segment labels to integer segment numbers.
 
-    Returns: dataframe
-    '''
+    Parameters
+    ----------
+    dataframe : pandas.DataFrame
+        NCBI Virus metadata table containing a ``Segment`` column.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Input dataframe with normalized integer values in ``Segment``.
+    """
     dataframe['Segment']=dataframe['Segment'].astype(str)
     segment_to_number_iav={'PB2':'1', 'PB1':'2', 'PA':'3', 'HA':'4', 'NP':'5', 'NA':'6', 'MP':'7', 'NS':'8'}
     dataframe['Segment']=dataframe['Segment'].apply(lambda x: segment_to_number_iav[x] if x in segment_to_number_iav else x)
@@ -70,30 +77,56 @@ def normalise_segments(dataframe):
     
     return dataframe
 
-def remove_v_genotype(dataframe):
-    '''
-        Removes 'v' form genotype classifications
-    
-    :param dataframe: A NCBI virus metadata dataframe (pandas DataFrame)
-    
-    Returns: dataframe
-    '''
+def remove_v_genotype(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove trailing ``v`` markers from genotype values.
+
+    Parameters
+    ----------
+    dataframe : pandas.DataFrame
+        NCBI Virus metadata table containing a ``Genotype`` column.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Input dataframe with normalized genotype strings.
+    """
     dataframe['Genotype']=dataframe['Genotype'].str.replace('v', '', regex=False)
     return dataframe
 
-def normalise_len_to_int(dataframe):
-    '''
-    Converts Length values to int
-    
-    :param dataframe: A NCBI virus metadata dataframe (pandas DataFrame)
+def normalise_len_to_int(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert sequence lengths to integers.
 
-    Returns: dataframe
-    '''
+    Parameters
+    ----------
+    dataframe : pandas.DataFrame
+        NCBI Virus metadata table containing a ``Length`` column.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Input dataframe with integer values in ``Length``.
+    """
     dataframe['Length']=dataframe['Length'].astype(int)
     return dataframe
 
 
-def normalize_to_list(value):
+def normalize_to_list(value: Any) -> list[Any]:
+    """
+    Normalize a scalar or serialized list into a Python list.
+
+    Parameters
+    ----------
+    value : Any
+        Value to normalize.
+
+    Returns
+    -------
+    list
+        Empty list for null values, the original list for list inputs, or a
+        single-item list for scalar values.
+    """
     if value is None:
         return []
 
@@ -118,7 +151,20 @@ def normalize_to_list(value):
     return [value]
 
 
-def extract_h_n_candidates(value_list):
+def extract_h_n_candidates(value_list: Iterable[Any]) -> tuple[list[str], list[str]]:
+    """
+    Extract H and N subtype tokens from a list of labels.
+
+    Parameters
+    ----------
+    value_list : list
+        Candidate genotype strings such as ``H5N1``, ``H5``, or ``N1``.
+
+    Returns
+    -------
+    tuple[list, list]
+        Lists containing the H and N subtype tokens found in the input.
+    """
     h_vals = []
     n_vals = []
 
@@ -155,12 +201,34 @@ def extract_h_n_candidates(value_list):
 
 
 def expose_determining_component(
-    segment,
-    subtype,
-    segment_ha=4,
-    segment_na=6,
-    default_mode="keep"
-):
+    segment: Any,
+    subtype: Any,
+    segment_ha: int = 4,
+    segment_na: int = 6,
+    default_mode: str = "keep"
+) -> Any:
+    """
+    Extract the determining H or N component for a segment.
+
+    Parameters
+    ----------
+    segment : Any
+        Segment number being evaluated.
+    subtype : Any
+        Genotype value or collection of genotype values.
+    segment_ha : int, default 4
+        Segment number representing HA.
+    segment_na : int, default 6
+        Segment number representing NA.
+    default_mode : {"keep", "drop"}, default "keep"
+        Fallback behavior when a determining component cannot be extracted.
+
+    Returns
+    -------
+    str or None
+        The extracted H or N subtype token, the original value, or None
+        depending on the segment and fallback mode.
+    """
     values = normalize_to_list(subtype)
     h_vals, n_vals = extract_h_n_candidates(values)
 
@@ -172,7 +240,21 @@ def expose_determining_component(
 
     return subtype if default_mode == "keep" else None
 
-def safe_str_to_dict(x):
+def safe_str_to_dict(x: Any) -> Any:
+    """
+    Parse a string into a dictionary only when it represents one.
+
+    Parameters
+    ----------
+    x : Any
+        Value to inspect.
+
+    Returns
+    -------
+    Any
+        Parsed dictionary when ``x`` is a string representation of a dict,
+        otherwise the original value.
+    """
     # does not eval dicts
     if isinstance(x, dict):
         return x
@@ -188,29 +270,42 @@ def safe_str_to_dict(x):
         return x
     
 # Filtering funcs
-def drop_na_metadata(dataframe):
-    '''
-    Drops na values from vital columns - Segment, Genotype, Host, Country
-    
-    :param dataframe: A NCBI virus metadata dataframe (pandas DataFrame)
-    
-    Returns: Dataframe without NA values for genotype, country, segment and host
-    '''
+def drop_na_metadata(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove rows missing required metadata fields.
+
+    Parameters
+    ----------
+    dataframe : pandas.DataFrame
+        NCBI Virus metadata table.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered dataframe with non-null and non-empty values in the required
+        columns.
+    """
     cols=['Segment','Genotype','Host','Country']
     dataframe= dataframe.dropna(subset=cols)
     dataframe= dataframe[(dataframe[cols] != "").all(axis=1)]
     return dataframe
 
-def clean_assemblies(dataframe,number_of_segs):
-    '''
-    Removes every assembly that does not have the set number 
-    of segments to be complete (default -IAV:8)
-    
-    :param dataframe: A NCBI virus metadata dataframe (pandas DataFrame)
-    :param number_of_segs: Number of segments (integer)
-    
-    Returns: Dataframe
-    '''
+def clean_assemblies(dataframe: pd.DataFrame,number_of_segs: int) -> pd.DataFrame:
+    """
+    Keep only assemblies with the expected number of segments.
+
+    Parameters
+    ----------
+    dataframe : pandas.DataFrame
+        NCBI Virus metadata table containing an ``Assembly`` column.
+    number_of_segs : int
+        Minimum number of segments required for an assembly to be retained.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered dataframe containing only complete assemblies.
+    """
     assembly_counts = dataframe["Assembly"].value_counts()
     assemblies_to_remove = assembly_counts[assembly_counts < number_of_segs].index
 
@@ -219,7 +314,7 @@ def clean_assemblies(dataframe,number_of_segs):
     cleaned_df = dataframe.loc[~assembly_removal_mask].copy()
     return cleaned_df
 
-def get_offending_accessions_genotype(df, assembly_col="Assembly", accession_col="Accession", genotype_col="Genotype"):
+def get_offending_accessions_genotype(df: pd.DataFrame, assembly_col: str = "Assembly", accession_col: str = "Accession", genotype_col: str = "Genotype") -> list[str]:
     """
     Returns a list of accessions corresponding to assemblies with incomplete, mixed, empty, or non-standard genotypes.
 
@@ -234,7 +329,7 @@ def get_offending_accessions_genotype(df, assembly_col="Assembly", accession_col
     - The original df will not be modified, and the returned list will contain unique accessions without NaN values.
     """
 
-    def is_offending_genotype(g):
+    def is_offending_genotype(g: Any) -> bool:
         if pd.isna(g):
             return True
 
@@ -264,15 +359,23 @@ def get_offending_accessions_genotype(df, assembly_col="Assembly", accession_col
 
     return offending_accessions
 
-def get_size_outliers(dataframe, len_dict=seg_thress_A):
-    '''
-    Returns a list with size outlier sequences from a dataframe 
-    
-    :param dataframe: A NCBI virus metadata dataframe (pandas DataFrame)
-    :param len_dict: A Dictionary with length thressholds (Dict)
+def get_size_outliers(dataframe: pd.DataFrame, len_dict: dict = seg_thress_A) -> list[str]:
+    """
+    Return accessions whose segment lengths fall outside expected ranges.
 
-    Returns: size_outliers (List)
-    '''
+    Parameters
+    ----------
+    dataframe : pandas.DataFrame
+        NCBI Virus metadata table containing ``Segment``, ``Length``, and
+        ``Accession`` columns.
+    len_dict : dict, default ``seg_thress_A``
+        Length threshold dictionary keyed by segment-specific min/max names.
+
+    Returns
+    -------
+    list
+        Accessions whose segment length is outside the configured thresholds.
+    """
     
     size_outliers_PA=dataframe[(dataframe['Segment']==3) & ((dataframe['Length']<len_dict['PA_min']) | (dataframe['Length']>len_dict['PA_max']))]
     size_outliers_PA=size_outliers_PA['Accession'].tolist()
@@ -295,11 +398,11 @@ def get_size_outliers(dataframe, len_dict=seg_thress_A):
     return size_outliers
 
 def filter_by_ambiguous_nucleotides(
-    sequences_dict,
-    ambiguous_nucleotides,
-    threshold=10.0,
-    header_delimiter="|"
-):
+    sequences_dict: dict[str, str],
+    ambiguous_nucleotides: dict | set,
+    threshold: float = 10.0,
+    header_delimiter: str = "|"
+) -> dict[str, float]:
     """
     Identify sequences whose percentage of ambiguous nucleotides exceeds a given threshold.
 
@@ -364,23 +467,22 @@ def filter_by_ambiguous_nucleotides(
 
 
 
-def compare_non_determining(metadata_dataframe, report_dataframe):
-    '''
-    Compares metadata information to information obtained from an identification run 
-    on AFluID.
-    Tests if segments are consistent and if the genotype found on metadata is the 
-    same as one of the genotypes of the sample background.
-    Uses the accession number, parsed from the SAMPLE_NAME column of the report_dataframe 
-    to join both df's for comparison.
-    Assumes standard formats and cases (Upper for AFluID, casefold for NCBI / 
-    >accession |metadata as sample name )
-    This function is for non-determining segments only.
+def compare_non_determining(metadata_dataframe: pd.DataFrame, report_dataframe: pd.DataFrame) -> list[str]:
+    """
+    Compare report assignments against metadata for non-determining segments.
 
-    :param metadata_dataframe: NCBI Virus metadata dataframe
-    :param report_dataframe: AFluID ID report dataframe.
+    Parameters
+    ----------
+    metadata_dataframe : pandas.DataFrame
+        Reference metadata table from NCBI Virus.
+    report_dataframe : pandas.DataFrame
+        AFluID ID report dataframe.
 
-    Returns: List of inconsistent accessions.
-    '''
+    Returns
+    -------
+    list
+        Accessions with inconsistent segment or genotype assignments.
+    """
     report_dataframe = report_dataframe.copy()
 
     report_dataframe['Accession'] = report_dataframe['SAMPLE_NAME'].apply(
@@ -390,12 +492,12 @@ def compare_non_determining(metadata_dataframe, report_dataframe):
     report_dataframe['SEGMENT'] = report_dataframe['SEGMENT'].apply(safe_str_to_dict)
     report_dataframe['GENOTYPE'] = report_dataframe['GENOTYPE'].apply(safe_str_to_dict)
 
-    def parse_segment(x):
+    def parse_segment(x: Any) -> int:
         if isinstance(x, dict) and len(x) == 1:
             return int(list(x.keys())[0])
         return int(x)
 
-    def parse_genotype(x):
+    def parse_genotype(x: Any) -> list[str]:
         if isinstance(x, dict):
             return [str(k) for k in x.keys()]
         elif isinstance(x, list):
@@ -427,23 +529,22 @@ def compare_non_determining(metadata_dataframe, report_dataframe):
     return list(offending_keys)
 
 
-def compare_determining(metadata_dataframe, report_dataframe):
-    '''
-    Compares metadata information to information obtained from an identification run 
-    on AFluID.
-    Tests if segments are consistent and if the genotype found on metadata is the 
-    same as one of the genotypes of the sample background.
-    Uses the accession number, parsed from the SAMPLE_NAME column of the report_dataframe 
-    to join both df's for comparison.
-    Assumes standard formats and cases (Upper for AFluID, casefold for NCBI / 
-    >accession |metadata as sample name )
-    This function is for determining segments only.
+def compare_determining(metadata_dataframe: pd.DataFrame, report_dataframe: pd.DataFrame) -> list[str]:
+    """
+    Compare report assignments against metadata for determining segments.
 
-    :param metadata_dataframe: NCBI Virus metadata dataframe
-    :param report_dataframe: AFluID ID report dataframe.
+    Parameters
+    ----------
+    metadata_dataframe : pandas.DataFrame
+        Reference metadata table from NCBI Virus.
+    report_dataframe : pandas.DataFrame
+        AFluID ID report dataframe.
 
-    Returns: List of inconsistent accessions.
-    '''
+    Returns
+    -------
+    list
+        Accessions with inconsistent determining segment assignments.
+    """
     report_dataframe = report_dataframe.copy()
 
     report_dataframe['Accession'] = report_dataframe['SAMPLE_NAME'].apply(
@@ -453,12 +554,12 @@ def compare_determining(metadata_dataframe, report_dataframe):
     report_dataframe['SEGMENT'] = report_dataframe['SEGMENT'].apply(safe_str_to_dict)
     report_dataframe['GENOTYPE'] = report_dataframe['GENOTYPE'].apply(safe_str_to_dict)
 
-    def parse_segment(x):
+    def parse_segment(x: Any) -> int:
         if isinstance(x, dict) and len(x) == 1:
             return int(list(x.keys())[0])
         return int(x)
 
-    def parse_genotype(x):
+    def parse_genotype(x: Any) -> list[str]:
         if isinstance(x, dict):
             return [str(k) for k in x.keys()]
         elif isinstance(x, list):
@@ -498,17 +599,32 @@ def compare_determining(metadata_dataframe, report_dataframe):
 
     return list(offending_keys)
 
-def remove_duplicates_list(in_list):
-    '''
-    Removes duplicate values from a list
-    :param in_list: a list of values
-    Returns dedup (list)
+def remove_duplicates_list(in_list: list[Any]) -> list[Any]:
+    """
+    Remove duplicate values from a list.
 
-    '''
+    Parameters
+    ----------
+    in_list : list
+        Values to deduplicate.
+
+    Returns
+    -------
+    list
+        Deduplicated values.
+    """
     dedup= set(in_list)
     return list(dedup)
 
-def args():
+def args() -> argparse.Namespace:
+    """
+    Parse command-line arguments for the update routine.
+
+    Returns
+    -------
+    argparse.Namespace
+        Parsed update-script command-line options.
+    """
     parser=argparse.ArgumentParser(prog='AFluID update routine',description='AFluID: Automated Influenza Identification Pipeline')
     parser.add_argument('-c','--config',type=str,help='Configuration file path',default='config.ini',required=False)
     parser.add_argument('-ff','--fastafile',type=str,help='Update fasta file name - path in config',required=True)
@@ -519,7 +635,20 @@ def args():
     
 
 
-def main():
+def main() -> None:
+    """
+    Run the database update workflow.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This routine cleans incoming metadata and sequences, validates them through
+    an AFluID run, merges accepted records into the local databases, updates the
+    configuration, and re-runs the installation routine.
+    """
     ##### LOADING VARIABLES
     arg=args()
     config_file=arg.config
@@ -530,14 +659,17 @@ def main():
     old_fasta=f'{config["Filenames"]["l_blast"]}.fasta'
     new_metadata_filename=arg.metadatafile
     cwd=os.getcwd()
-    update, runs, references, reports, logs = config['Paths']['update'], config['Paths']['runs'],\
-          config['Paths']['references'], config['Paths']['reports'], config['Paths']['logs']
+    if 'update_reports' not in config['Paths']:
+        config['Paths']['update_reports'] = 'update/reports'
+    update, runs, references, update_reports, logs = config['Paths']['update'], config['Paths']['runs'],\
+          config['Paths']['references'], config['Paths']['update_reports'], config['Paths']['logs']
     blasts, clusters, metadata =config['Paths']['blast_database'], config['Paths']['cluster_database'],\
         config['Paths']['metadata']
     rm_previous=config['Functions']['remove_previous'] if\
         arg.remove_previous.lower()=='on' else False
     update_p, runs_p=os.path.abspath(os.path.join(cwd,update)), os.path.abspath(os.path.join(cwd,runs))
-    references_p, reports_p=os.path.abspath(os.path.join(cwd,references)), os.path.abspath(os.path.join(cwd,reports))
+    references_p = os.path.abspath(os.path.join(cwd,references))
+    update_reports_p = os.path.abspath(os.path.join(cwd, update_reports))
     logs_p,blasts_p =os.path.abspath(os.path.join(cwd,logs)),os.path.abspath(os.path.join(cwd,blasts)) 
     clusters_p, metadata_p=os.path.abspath(os.path.join(cwd,clusters)), os.path.abspath(os.path.join(cwd,metadata))
     threads, num_seqs =int(config['blast']['num_threads']), int(config['blast']['max_target_seqs'])
@@ -548,22 +680,18 @@ def main():
     if os.path.exists(update_p):
         if os.path.exists(runs_p):
             if os.path.exists(references_p):
-                if os.path.exists(reports_p):
-                    if os.path.exists(blasts_p):
-                        if os.path.exists(clusters_p):
-                            if os.path.exists(metadata_p):
-                                print("Directories exist: Continuing analysis")
-                            else:
-                                print("Metadata path does not exist")
-                                sys.exit()
+                if os.path.exists(blasts_p):
+                    if os.path.exists(clusters_p):
+                        if os.path.exists(metadata_p):
+                            print("Directories exist: Continuing analysis")
                         else:
-                            print("Cluster database path does not exist")
+                            print("Metadata path does not exist")
                             sys.exit()
                     else:
-                        print("Blast database path does not exist")
+                        print("Cluster database path does not exist")
                         sys.exit()
                 else:
-                    print("Reports path does not exist")
+                    print("Blast database path does not exist")
                     sys.exit()
             else:
                 print("References path does not exist")
@@ -576,6 +704,8 @@ def main():
         sys.exit()
     if not os.path.exists(logs_p):
         os.makedirs(logs_p)
+    if not os.path.exists(update_reports_p):
+        os.makedirs(update_reports_p)
     if rm_previous:
         # Remove all files in RUN_DIR except *.pkl
         for file in glob.glob(os.path.join(runs_p, "*")):
@@ -608,12 +738,12 @@ def main():
     dict_to_fasta(new_seqs,os.path.join(update_p,fasta_filename))
     file=fasta_filename.replace('.fasta','')
     #### STEP 4 - AFLUID RUN
-    if not os.path.exists(os.path.join(reports_p,f"{file}_ID_Report.txt")):
+    if not os.path.exists(os.path.join(update_reports_p,f"{file}_ID_Report.txt")):
         print("Starting AFluID")
         fasta_filename=fasta_filename+'.fasta'
         dict_cluster=json_load(os.path.join(clusters_p,config["Filenames"]["cluster_pkl"]))
         print("Remapping seqs")
-        mappings=fasta_preprocess(fasta_filename,update_p,runs_p,min,max,flags,verbose=True)
+        mappings=fasta_preprocess(fasta_filename,update_p,runs_p,file,min,max,flags,verbose=True)
 
         #snapshot 1 for the longest procecesses
         if not os.path.exists(os.path.join(runs_p,f'format_{file}')):
@@ -623,27 +753,27 @@ def main():
         print('Creating assignment object')
         assignments=cluster_assign(f'format_{file}.clstr',os.path.join(runs_p,f'format_{fasta_filename}'),runs_p)
         print("Creating cluster report")
-        cluster_compile(assignments,dict_cluster,os.path.join(runs_p,f'format_{file}.assign'),reports_p)
+        cluster_compile(assignments,dict_cluster,os.path.join(runs_p,f'format_{file}.assign'),update_reports_p)
         print("Creating Blast Fasta")
-        cluster_report=cluster_miner(reports_p,file,runs_p,runs_p,flags)
+        cluster_report=cluster_miner(update_reports_p,file,runs_p,runs_p,flags)
         threads=config['blast']['num_threads']
         num_seqs=config['blast']['max_target_seqs']
         print("Starting Blast")
         if flags['Master']['C_BLAST']:
             blast_cluster=bclust(clusters_p,config["Filenames"]["cluster_metadata"],runs_p,blasts_p,config["Filenames"]["cluster"],runs_p,\
-                             fasta_filename,flags,num_threads=int(threads),max_tar_seq=int(num_seqs),fasta=f"{fasta_filename.replace('.fasta','')}_to_blast.fasta")
+                             file,flags,num_threads=int(threads),max_tar_seq=int(num_seqs),fasta=f"{file}_to_blast.fasta")
             if flags['Master']['L_BLAST']:
-                blast_report=reblast(metadata_p,main_metadata,runs_p,blasts_p,config["Filenames"]["l_blast"],runs_p,\
-                                 fasta_filename,threads=int(threads),max_tar_seq=int(num_seqs),fasta=f"{fasta_filename.replace('.fasta','')}_to_reblast.fasta")
-                report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags,bclust_dict=blast_cluster,blast_dict=blast_report)
+                blast_report=reblast(metadata_p,config["Filenames"]["metadata"],runs_p,blasts_p,config["Filenames"]["l_blast"],runs_p,\
+                                 file,threads=int(threads),max_tar_seq=int(num_seqs),fasta=f"{file}_to_reblast.fasta")
+                report_compiler(cluster_report,runs_p,file,mappings,update_reports_p,flags,bclust_dict=blast_cluster,blast_dict=blast_report)
             else:
-                report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags,bclust_dict=blast_cluster)
+                report_compiler(cluster_report,runs_p,file,mappings,update_reports_p,flags,bclust_dict=blast_cluster)
         else:
-            report_compiler(cluster_report,runs_p,fasta_filename,mappings,reports_p,flags)
+            report_compiler(cluster_report,runs_p,file,mappings,update_reports_p,flags)
     
     #### STEP 5 - SEGMENT AND GENOTYPE COMPARISON
     print("Cross-referencing with metadata")
-    id_report=pd.read_table(os.path.join(reports_p,f"{file}_ID_Report.txt"),index_col=False)
+    id_report=pd.read_table(os.path.join(update_reports_p,f"{file}_ID_Report.txt"),index_col=False)
     accessions_to_remove=compare_non_determining(new_metadata,id_report)+compare_determining(new_metadata,id_report)
     accessions_to_remove=remove_duplicates_list(accessions_to_remove)
     new_metadata=new_metadata[~new_metadata['Accession'].isin(accessions_to_remove)]
@@ -697,4 +827,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

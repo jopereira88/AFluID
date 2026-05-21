@@ -7,13 +7,17 @@ import configparser
 import subprocess
 import json
 import ast
+import csv
 import glob
 import re
 import hashlib
+import shutil
+import tempfile
 import numpy as np
 from typing import Any, Iterable, Optional
 from collections import defaultdict
 from flu_utils import seq_get,dict_to_fasta,headers_from_mult_fas,parse_clstr,json_load,\
+    concat_fasta,\
     seq_filter_get,mine_genotype_H,mine_genotype_N,convert_to_prop, mine_single_HA,mine_single_NA
 from metadata_utils import ClusterReportTable, ClusterMetadata, SequenceMetadata
 from structures import flagdict, taxa_dict, muts_loci_meaning , int_to_iupac, muts_interest,seg_lens, \
@@ -25,6 +29,17 @@ from gb_utils import fetch_genbank_list, append_genbank_from_list, get_gb, creat
     write_gb,gb_to_fasta
 from pathlib import Path
 from datetime import datetime
+
+
+_TOOL_VERSION_CACHE: dict[str, dict[str, str]] = {}
+
+_BATCH_SUMMARY_FIELDS = [
+    'input_file', 'file_tag', 'status', 'error', 'sample_dir', 'reports_dir_rel',
+    'flumut_ran', 'nextclade_ran', 'genin2_ran', 'clade', 'genotype',
+    'genin2_genotype', 'genin2_subgenotype',
+    'genin2_pb2', 'genin2_pb1', 'genin2_pa', 'genin2_np', 'genin2_na', 'genin2_mp', 'genin2_ns',
+    'mutations_of_interest',
+]
 
 
 def _set_tool_status(flags: dict, tool: str, status: str, detail: str = '') -> None:
@@ -42,6 +57,103 @@ def _write_flags_json(reports_p: str, output_tag: str, flags: dict) -> None:
         json.dump(flags, f)
 
 
+def _write_tool_versions_tsv(reports_p: str, output_tag: str, tool_versions: dict[str, str]) -> None:
+    """Persist tool version metadata as a simple TSV."""
+    output_fp = os.path.join(reports_p, f'{output_tag}_tool_versions.tsv')
+    with open(output_fp, 'w', encoding='utf-8') as out:
+        out.write('tool\tversion\n')
+        for tool in sorted(tool_versions):
+            version = str(tool_versions[tool]).replace('\t', ' ').replace('\n', ' ').strip()
+            out.write(f'{tool}\t{version}\n')
+
+
+def _version_command_for(tool_name: str) -> Optional[list[str]]:
+    """Return the command used to query a CLI tool version."""
+    commands = {
+        'blastn': ['blastn', '-version'],
+        'cd-hit-est-2d': ['cd-hit-est-2d', '-h'],
+        'flumut': ['flumut', '-V'],
+        'genin2': ['genin2', '--version'],
+        'nextclade': ['nextclade', '--version'],
+    }
+    return commands.get(tool_name)
+
+
+def _first_nonempty_line(text: str) -> str:
+    """Return the first non-empty line from command output."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ''
+
+
+def _parse_tool_versions(tool_name: str, output_text: str) -> dict[str, str]:
+    """Normalize raw version command output into tool/version pairs."""
+    output_text = str(output_text).strip()
+    if not output_text:
+        return {tool_name: 'unavailable'}
+
+    if tool_name == 'flumut':
+        parsed = {}
+        for line in output_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('FluMut:'):
+                parsed['flumut'] = stripped.split(':', 1)[1].strip() or 'unavailable'
+            elif stripped.startswith('FluMutDB:'):
+                parsed['FluMutDB'] = stripped.split(':', 1)[1].strip() or 'unavailable'
+        if parsed:
+            parsed.setdefault('flumut', 'unavailable')
+            parsed.setdefault('FluMutDB', 'unavailable')
+            return parsed
+        return {'flumut': _first_nonempty_line(output_text) or 'unavailable', 'FluMutDB': 'unavailable'}
+
+    if tool_name == 'blastn':
+        line = _first_nonempty_line(output_text)
+        return {'blastn': line.split(':', 1)[1].strip() if ':' in line else (line or 'unavailable')}
+
+    if tool_name == 'cd-hit-est-2d':
+        match = re.search(r'CD-HIT version\s+([^\s]+)\s+\(built on\s+([^)]+)\)', output_text, flags=re.IGNORECASE)
+        if match:
+            return {'cd-hit-est-2d': f'{match.group(1)} (built on {match.group(2)})'}
+        return {'cd-hit-est-2d': _first_nonempty_line(output_text) or 'unavailable'}
+
+    return {tool_name: _first_nonempty_line(output_text) or 'unavailable'}
+
+
+def _capture_tool_version(tool_name: str) -> dict[str, str]:
+    """Capture and cache version metadata for a supported CLI tool."""
+    if tool_name in _TOOL_VERSION_CACHE:
+        return dict(_TOOL_VERSION_CACHE[tool_name])
+
+    command = _version_command_for(tool_name)
+    if command is None:
+        versions = {tool_name: 'unavailable'}
+    else:
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, check=False)
+            output_text = '\n'.join(part for part in [completed.stdout, completed.stderr] if part).strip()
+            versions = _parse_tool_versions(tool_name, output_text)
+        except Exception:
+            versions = {tool_name: 'unavailable'}
+
+    _TOOL_VERSION_CACHE[tool_name] = dict(versions)
+    return dict(versions)
+
+
+def _record_tool_versions(command: list[str], tool_versions: Optional[dict[str, str]], enabled: bool = False) -> None:
+    """Record CLI tool versions for the executable used by a command."""
+    if not enabled or tool_versions is None or not command:
+        return
+
+    executable = os.path.basename(str(command[0]).strip())
+    if not executable:
+        return
+
+    for key, value in _capture_tool_version(executable).items():
+        tool_versions[key] = value
+
+
 def _require_files(paths: Iterable[str], context: str) -> None:
     """Raise a clear error when expected pipeline artifacts are missing."""
     missing = [path for path in paths if not os.path.exists(path)]
@@ -51,8 +163,10 @@ def _require_files(paths: Iterable[str], context: str) -> None:
 
 
 def _run_command(command: list[str], tool_name: str, sample_tag: str = '', expected_outputs: Optional[Iterable[str]] = None,
-                 stdout: Any = None, stderr: Any = None) -> None:
+                 stdout: Any = None, stderr: Any = None, tool_versions: Optional[dict[str, str]] = None,
+                 capture_tool_versions: bool = False) -> None:
     """Run an external command and raise a contextual error on failure."""
+    _record_tool_versions(command, tool_versions, enabled=capture_tool_versions)
     completed = subprocess.run(command, stdout=stdout, stderr=stderr)
     if completed.returncode != 0:
         sample_msg = f' for {sample_tag}' if sample_tag else ''
@@ -161,7 +275,9 @@ def fasta_preprocess(
     return header_mapping
 
 #### CD-HIT
-def cd_hit_est_2d(filename: str, cluster_reps: str, output: str, identity: float, logs_p: str, log_tag: str = None, verbose: bool = False) -> None:
+def cd_hit_est_2d(filename: str, cluster_reps: str, output: str, identity: float, logs_p: str, log_tag: str = None,
+                  verbose: bool = False, tool_versions: Optional[dict[str, str]] = None,
+                  capture_tool_versions: bool = False) -> None:
     """
     Run `cd-hit-est-2d` against cluster representatives.
 
@@ -199,7 +315,9 @@ def cd_hit_est_2d(filename: str, cluster_reps: str, output: str, identity: float
                 sample_tag=tag,
                 expected_outputs=[f'{output}.clstr', output],
                 stdout=out,
-                stderr=err
+                stderr=err,
+                tool_versions=tool_versions,
+                capture_tool_versions=capture_tool_versions,
             )
     else:
         _run_command(
@@ -207,6 +325,8 @@ def cd_hit_est_2d(filename: str, cluster_reps: str, output: str, identity: float
             'cd-hit-est-2d',
             sample_tag=tag,
             expected_outputs=[f'{output}.clstr', output],
+            tool_versions=tool_versions,
+            capture_tool_versions=capture_tool_versions,
         )
 
 #### CLUSTERING AND CLUSTER REPORT
@@ -472,7 +592,9 @@ def best_blast(runs_p:str,blast_report:str,thres_id:float=0.0) -> dict[str, list
         out_dict[row.qseqid]=[row.sseqid,row.pident]
     return out_dict
 
-def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,file_tag:str,flags:dict,num_threads:int=2,max_tar_seq:int=7,fasta:str='to_blast.fasta') -> dict[str, list[str | float | dict[str, int | float]]]:
+def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,file_tag:str,flags:dict,
+           num_threads:int=2,max_tar_seq:int=7,fasta:str='to_blast.fasta', tool_versions: Optional[dict[str, str]] = None,
+           capture_tool_versions: bool = False) -> dict[str, list[str | float | dict[str, int | float]]]:
     """
     Run cluster-representative BLAST for unassigned sequences.
 
@@ -515,6 +637,8 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
         'cluster BLAST',
         sample_tag=file_tag,
         expected_outputs=[blast_output],
+        tool_versions=tool_versions,
+        capture_tool_versions=capture_tool_versions,
     )
     b_tab=best_blast(runs_p,f"{file_tag}_bcrun.txt",thres_id=90.0)
     pd.set_option('display.max_colwidth', None)
@@ -543,7 +667,9 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
         flags['Master']['L_BLAST']=False
     return b_tab
 
-def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,file_tag:str,threads:int=2,max_tar_seq:int=7,fasta:str='to_reblast.fasta') -> dict[str, list[str | float]]:
+def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,runs_p:str,file_tag:str,threads:int=2,
+            max_tar_seq:int=7,fasta:str='to_reblast.fasta', tool_versions: Optional[dict[str, str]] = None,
+            capture_tool_versions: bool = False) -> dict[str, list[str | float]]:
     """
     Run local-database BLAST for sequences still unassigned after cluster BLAST.
 
@@ -582,6 +708,8 @@ def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str
         'local BLAST',
         sample_tag=file_tag,
         expected_outputs=[blast_output],
+        tool_versions=tool_versions,
+        capture_tool_versions=capture_tool_versions,
     )
     report=best_blast(runs_p,f"{file_tag}_brun.txt")
     metadata=pd.read_csv(os.path.join(metadata_p,metadata_f),sep=';',index_col=False)
@@ -1011,9 +1139,14 @@ def redirector(report: str, flags: dict, file_tag: str, mappings: dict[str, str]
 
 
 #### FLUMUT PATH
-def update_flumut_db() -> None:
+def update_flumut_db(tool_versions: Optional[dict[str, str]] = None, capture_tool_versions: bool = False) -> None:
     """Update the local FluMut database using the external CLI."""
-    _run_command(['flumut', '--update'], 'FluMut DB update')
+    _run_command(
+        ['flumut', '--update'],
+        'FluMut DB update',
+        tool_versions=tool_versions,
+        capture_tool_versions=capture_tool_versions,
+    )
 
 def conform_to_flumut(flagdict: dict, sample_path: str, file_tag: str) -> None:
     """
@@ -1050,10 +1183,67 @@ def conform_to_flumut(flagdict: dict, sample_path: str, file_tag: str) -> None:
         if key in seq_seg:
             outdict[f'{key}_{seq_seg[key]}'] = flt_fasta[key]
     dict_to_fasta(outdict, os.path.join(sample_path, f'{file_tag}_to_flumut'))
-        
-def run_flumut(reports_p: str, samples_p: str, file_tag: str, regex: str = "(.+)\_(.+)") -> None:
+
+def conform_to_genin(flagdict: dict, mappings: dict[str, str], sample_path: str, file_tag: str) -> None:
     """
-    Run FluMut on the prepared sample FASTA.
+    Write a GenIn2-ready FASTA preserving a shared sample prefix.
+
+    Parameters
+    ----------
+    flagdict : dict
+        Pipeline state dictionary containing per-segment assignments and the
+        list of sequences selected for GenIn2.
+    mappings : dict
+        Mapping from internal FASTA identifiers to original sequence headers.
+    sample_path : str
+        Directory containing ``format_{file_tag}.fasta``.
+    file_tag : str
+        Flat sample identifier used to name the output FASTA.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    GenIn2 groups records by the header stem before the final ``_SEGMENT``
+    suffix, so this export uses the sample file stem across all segments.
+    """
+    seq_seg = {}
+    for key in flagdict['Sample']:
+        if key in ('PB2', 'PB1', 'PA', 'HA', 'NP', 'NA', 'MP', 'NS'):
+            for header in flagdict['Sample'][key]:
+                if header in flagdict['Final Report']['Sequences for GenIn']:
+                    seq_seg[header] = key
+
+    formatted_fasta = seq_get(os.path.join(sample_path, f'format_{file_tag}.fasta'))
+    outdict = {}
+
+    for selected_header, segment in seq_seg.items():
+        internal_header = selected_header if selected_header in formatted_fasta else None
+        if internal_header is None and selected_header in mappings:
+            internal_header = selected_header
+
+        if internal_header is None or internal_header not in formatted_fasta:
+            continue
+
+        outdict[f'>{file_tag}_{segment}'] = formatted_fasta[internal_header]
+
+    dict_to_fasta(outdict, os.path.join(sample_path, f'{file_tag}_to_genin'))
+        
+def run_flumut(
+    reports_p: str,
+    samples_p: str,
+    file_tag: str,
+    regex: str = "(.+)\_(.+)",
+    excel_output: Optional[str] = None,
+    write_tsv_outputs: bool = True,
+    input_fasta: Optional[str] = None,
+    tool_versions: Optional[dict[str, str]] = None,
+    capture_tool_versions: bool = False,
+) -> None:
+    """
+    Run FluMut on a prepared FASTA.
 
     Parameters
     ----------
@@ -1065,6 +1255,12 @@ def run_flumut(reports_p: str, samples_p: str, file_tag: str, regex: str = "(.+)
         Flat sample identifier used to build input and output filenames.
     regex : str, default ``"(.+)\_(.+)"``
         Regular expression passed to FluMut for parsing FASTA headers.
+    excel_output : str, optional
+        Excel workbook path passed to FluMut via ``-x``.
+    write_tsv_outputs : bool, default True
+        Whether to request the standard TSV outputs.
+    input_fasta : str, optional
+        Explicit FASTA path to run instead of ``{file_tag}_to_flumut.fasta``.
 
     Returns
     -------
@@ -1074,12 +1270,27 @@ def run_flumut(reports_p: str, samples_p: str, file_tag: str, regex: str = "(.+)
     markers_fp = os.path.join(reports_p, f"{file_tag}_markers.tsv")
     mutations_fp = os.path.join(reports_p, f"{file_tag}_mutations.tsv")
     literature_fp = os.path.join(reports_p, f"{file_tag}_literature.tsv")
+    fasta_fp = input_fasta if input_fasta is not None else os.path.join(samples_p, f"{file_tag}_to_flumut.fasta")
+    command = ['flumut']
+    expected_outputs = []
+
+    if write_tsv_outputs:
+        command.extend(['-m', markers_fp, '-M', mutations_fp, '-l', literature_fp])
+        expected_outputs.extend([markers_fp, mutations_fp])
+
+    if excel_output:
+        command.extend(['-x', excel_output])
+        expected_outputs.append(excel_output)
+
+    command.extend([fasta_fp, '-n', regex])
+
     _run_command(
-        ['flumut', '-m', markers_fp, '-M', mutations_fp,
-         '-l', literature_fp, os.path.join(samples_p, f"{file_tag}_to_flumut.fasta"), '-n', regex],
+        command,
         'FluMut',
         sample_tag=file_tag,
-        expected_outputs=[markers_fp, mutations_fp],
+        expected_outputs=expected_outputs,
+        tool_versions=tool_versions,
+        capture_tool_versions=capture_tool_versions,
     )
 def remap_flumut_report(reports_dir: str, mappings: dict, filename: str) -> None:
     """
@@ -1192,7 +1403,7 @@ def mut_miner(dataframe: str, muts_of_interest: dict[str, Iterable[str]], flagsd
                 flagsdict["Sample"][f"{j}_muts"].append(mut)
 
 #### GET REFERENCE PATH
-def get_reference(listref: Iterable[str], references_p: str, db_p: str, file_tag: str, email: Optional[str] = None, update_local_db: bool = False) -> None:
+def get_reference(listref: Iterable[str], references_p: str, reference_output_p: str, db_p: str, file_tag: str, email: Optional[str] = None, update_local_db: bool = False) -> None:
     """
     Retrieve reference GenBank records and export them for a sample.
 
@@ -1201,6 +1412,8 @@ def get_reference(listref: Iterable[str], references_p: str, db_p: str, file_tag
     listref : list
         Reference accession identifiers to retrieve.
     references_p : str
+        Directory containing the shared local reference database.
+    reference_output_p : str
         Directory where the sample-specific reference files are written.
     db_p : str
         Filename of the local GenBank database inside ``references_p``.
@@ -1219,9 +1432,11 @@ def get_reference(listref: Iterable[str], references_p: str, db_p: str, file_tag
     references=set(listref)
     found=[]
     missing=[]
+    reference_db_fp = os.path.join(references_p, db_p)
+    output_p = reference_output_p
 
     #checking if local_db has entries
-    records=create_lookup(os.path.join(references_p,db_p))
+    records=create_lookup(reference_db_fp)
     for ref in references:
         if ref in records:
             found.append(ref)
@@ -1230,16 +1445,16 @@ def get_reference(listref: Iterable[str], references_p: str, db_p: str, file_tag
     #getting missing records
     remote=fetch_genbank_list(missing,email)
     #getting local records
-    local=get_gb(os.path.join(references_p,db_p), found)
+    local=get_gb(reference_db_fp, found)
     #creating output files
     output=remote+local
     #writing output files (.gb and .fasta)
     outname = f'{file_tag}_references'
-    write_gb(output,os.path.join(references_p,f'{outname}.gb'))
-    gb_to_fasta(os.path.join(references_p,f'{outname}.gb'),os.path.join(references_p,f'{outname}.fasta'))
+    write_gb(output,os.path.join(output_p,f'{outname}.gb'))
+    gb_to_fasta(os.path.join(output_p,f'{outname}.gb'),os.path.join(output_p,f'{outname}.fasta'))
 
     if update_local_db:
-        append_genbank_from_list(os.path.join(references_p,db_p),remote)
+        append_genbank_from_list(reference_db_fp,remote)
 #### NEXTCLADE PATH
 def fasta_to_nextclade(flagsdict: dict, samples_p: str, file_tag: str) -> None:
     """
@@ -1278,7 +1493,8 @@ def fasta_to_nextclade(flagsdict: dict, samples_p: str, file_tag: str) -> None:
 
         if outdict:
             dict_to_fasta(outdict, os.path.join(samples_p, f'{file_tag}_to_nextclade_{genotype}'))
-def run_nextclade(fasta: str,flagsdict: dict,reports_p: str,samples_p: str,file_tag: str) -> None:
+def run_nextclade(fasta: str,flagsdict: dict,reports_p: str,samples_p: str,file_tag: str,
+                  tool_versions: Optional[dict[str, str]] = None, capture_tool_versions: bool = False) -> None:
     """
     Run Nextclade for each supported HA genotype present in the sample.
 
@@ -1310,6 +1526,8 @@ def run_nextclade(fasta: str,flagsdict: dict,reports_p: str,samples_p: str,file_
                 f'Nextclade {fasta_gen}',
                 sample_tag=file_tag,
                 expected_outputs=[nextclade_fp],
+                tool_versions=tool_versions,
+                capture_tool_versions=capture_tool_versions,
             )
 def remap_nextclade(reports_p: str,nextclade_report: str,mappings_dict: dict[str, str]) -> None:
     """
@@ -1405,14 +1623,15 @@ def to_genin2(flagsdict: dict) -> bool:
             return True
     return False
 
-def run_genin2(samples_p: str, file_tag: str, genin_report: str) -> None:
+def run_genin2(samples_p: str, file_tag: str, genin_report: str,
+               tool_versions: Optional[dict[str, str]] = None, capture_tool_versions: bool = False) -> None:
     """
     Run GenIn2 on the FluMut-formatted sample FASTA.
 
     Parameters
     ----------
     samples_p : str
-        Directory containing ``{file_tag}_to_flumut.fasta``.
+        Directory containing ``{file_tag}_to_genin.fasta``.
     file_tag : str
         Flat sample identifier used to build the input FASTA name.
     genin_report : str
@@ -1423,10 +1642,12 @@ def run_genin2(samples_p: str, file_tag: str, genin_report: str) -> None:
     None
     """
     _run_command(
-        ['genin2','-o', genin_report, os.path.join(samples_p,f"{file_tag}_to_flumut.fasta")],
+        ['genin2','-o', genin_report, os.path.join(samples_p,f"{file_tag}_to_genin.fasta")],
         'GenIn2',
         sample_tag=file_tag,
         expected_outputs=[genin_report],
+        tool_versions=tool_versions,
+        capture_tool_versions=capture_tool_versions,
     )
 
 def remap_genin2(reports_p: str, genin_report: str, mappings: dict[str, str], flagsdict: dict) -> dict:
@@ -1456,14 +1677,51 @@ def remap_genin2(reports_p: str, genin_report: str, mappings: dict[str, str], fl
     genin_path = os.path.join(reports_p, genin_report)
     genin_df = pd.read_table(genin_path, index_col=False)
 
-    genin_df['Sample Name'] = genin_df['Sample Name'].apply(
-        lambda x: str(mappings[f'>{x}']).strip() if f'>{x}' in mappings else str(x).strip()
-    )
+    segment_cols = ['PB2', 'PB1', 'PA', 'NP', 'NA', 'MP', 'NS']
+    segment_to_original = {}
+    for segment in ('PB2', 'PB1', 'PA', 'HA', 'NP', 'NA', 'MP', 'NS'):
+        originals = []
+        for internal_header in flagsdict.get('Sample', {}).get(segment, []):
+            original_header = mappings.get(internal_header)
+            if original_header:
+                originals.append(str(original_header).strip())
+        if originals:
+            segment_to_original[segment] = originals
+
+    original_stems = set()
+    for segment, originals in segment_to_original.items():
+        suffix = f'_{segment}'
+        for original in originals:
+            header_text = original.lstrip('>')
+            if header_text.endswith(suffix):
+                original_stems.add(header_text[:-len(suffix)])
+
+    shared_original_stem = list(original_stems)[0] if len(original_stems) == 1 else ''
+
+    def _remap_genin_sample_name(sample_name: Any, row: pd.Series) -> str:
+        name = str(sample_name).strip()
+        valid = []
+        for segment in segment_cols:
+            value = row.get(segment)
+            if pd.notna(value) and str(value).strip() not in ('', '?'):
+                valid.append(segment)
+
+        if len(valid) == 1 and valid[0] in segment_to_original and len(segment_to_original[valid[0]]) == 1:
+            return segment_to_original[valid[0]][0]
+
+        if shared_original_stem:
+            return shared_original_stem
+
+        return name
+
+    genin_df['Sample Name'] = [
+        _remap_genin_sample_name(sample_name, row)
+        for sample_name, (_, row) in zip(genin_df['Sample Name'].tolist(), genin_df.iterrows())
+    ]
 
     genin_df.to_csv(genin_path, sep='\t', index=False)
 
-    segment_cols = ['PB2', 'PB1', 'PA', 'NP', 'NA', 'MP', 'NS']
-    result = {}
+    result = []
     skipped = []
 
     for _, row in genin_df.iterrows():
@@ -1476,25 +1734,28 @@ def remap_genin2(reports_p: str, genin_report: str, mappings: dict[str, str], fl
         else:
             sub_genotype = str(sub_genotype).strip()
 
-        valid = row[segment_cols][row[segment_cols].notna() & (row[segment_cols] != '?')]
+        valid = row[segment_cols][row[segment_cols].notna() & (row[segment_cols].astype(str).str.strip() != '?')]
 
         if len(valid) == 0:
             skipped.append({'sample': sample_name, 'reason': 'no_valid_segment'})
             continue
 
-        if len(valid) > 1:
-            skipped.append({'sample': sample_name, 'reason': 'multiple_valid_segments', 'values': valid.to_dict()})
-            continue
-
-        segment_name = str(valid.index[0]).strip()
-        segment_value = str(valid.iloc[0]).strip()
-
-        result[sample_name] = {
-            'segment': segment_name,
+        row_result = {
+            'Sample Name': sample_name,
             'Genotype': genotype,
             'Sub-genotype': sub_genotype,
-            'value': segment_value
+            'Notes': '' if pd.isna(row.get('Notes', '')) else str(row.get('Notes', '')).strip(),
         }
+        for segment in segment_cols:
+            value = row.get(segment, '')
+            row_result[segment] = '' if pd.isna(value) else str(value).strip()
+
+        if len(valid) > 1:
+            row_result['Output Format'] = 'constellation'
+        else:
+            row_result['Output Format'] = 'expanded'
+
+        result.append(row_result)
 
     flagsdict['Sample']['Genin_genotypes'] = result
     flagsdict['Sample']['Genin_skipped_rows'] = skipped
@@ -1520,19 +1781,59 @@ def parser() -> argparse.Namespace:
     parser.add_argument('-m', '--mode', type=str, help='Mode of operation', choices=('contig', 'consensus'), required=True)
     parser.add_argument('-b', '--batch', action='store_true', help='Run pipeline for all FASTA files in batch directory')
     parser.add_argument('-bd', '--batch_dir', type=str, default='', help='Subdirectory inside samples/ to use for batch mode')
+    parser.add_argument('-bn', '--batch_name', type=str, help='Optional name for the batch output directory', required=False)
     parser.add_argument('-ff', '--force', help='Force run of aditional tools', nargs='*', choices=('flumut', 'genin', 'getref'))
     parser.add_argument('-fdb', '--update_flumut_db', type=str, help='turn off auto-update for flumut db', choices=('on', 'off'), default='on', required=False)
     parser.add_argument('-ss', '--single_sample', type=str, help='Single sample mode', default='on', choices=('on', 'off'), required=False)
+    parser.add_argument('-o', '--output_name', type=str, help='Optional output stem for direct non-batch single-file runs', required=False)
     parser.add_argument('-off', '--turn_off', help='Turn Off additional analysis tools', nargs='*', choices=('flumut', 'genin', 'nextclade', 'getref'))
     parser.add_argument('-rm', '--remove_previous', type=str, help='Remove previous files', default='on', choices=('on', 'off'), required=False)
     parser.add_argument('-Ml', '--max_length', type=int, help='Maximum sequence length', required=False)
     parser.add_argument('-ml', '--min_length', type=int, help='Minimum sequence length', required=False)
+    parser.add_argument('--outdir', type=str, help='Optional root directory for per-sample report/reference outputs', required=False)
+    parser.add_argument('--replace', action='store_true', help='Replace existing output directories before running')
     parser.add_argument('--skip_cdhit', action='store_true', help='Bypass cd-hit-est-2d and send all sequences directly to cluster BLAST')
+    parser.add_argument('-tv', '--tool-versions', action='store_true', help='Write an optional tool/version TSV from always-captured CLI version metadata')
+    parser.add_argument('-bf', '--batch_fasta', action='store_true', help='Demultiplex one multifasta into a temporary batch of per-sample FASTAs')
+    parser.add_argument('--force-bf', action='store_true', help='If --batch_fasta input is not demultipliable, run it as a multi-sample FASTA instead of failing')
+    parser.add_argument('--bf-regex', type=str, required=False, help='Mandatory regex for --batch_fasta that captures only the sample identifier')
 
     args = parser.parse_args()
 
     if not args.batch and not args.filename:
         parser.error("--filename is required unless --batch is used")
+
+    if args.batch_name and not (args.batch or args.batch_fasta):
+        parser.error("--batch_name can only be used with --batch or --batch_fasta")
+
+    if args.batch_name is not None and not str(args.batch_name).strip():
+        parser.error("--batch_name cannot be empty")
+
+    if args.batch and args.batch_fasta:
+        parser.error("--batch and --batch_fasta cannot be used together")
+
+    if args.batch_fasta and not args.filename:
+        parser.error("--batch_fasta requires --filename")
+
+    if args.batch_fasta and not args.bf_regex:
+        parser.error("--bf-regex is required when --batch_fasta is used")
+
+    if args.bf_regex and not args.batch_fasta:
+        parser.error("--bf-regex can only be used with --batch_fasta")
+
+    if args.force_bf and not args.batch_fasta:
+        parser.error("--force-bf can only be used with --batch_fasta")
+
+    if args.output_name is not None:
+        output_name = str(args.output_name).strip()
+        if not output_name:
+            parser.error("--output_name cannot be empty")
+        if output_name in {'.', '..'} or '/' in output_name or '\\' in output_name:
+            parser.error("--output_name must be a single name without path separators")
+        if re.fullmatch(r'[A-Za-z0-9._-]+', output_name) is None:
+            parser.error("--output_name may only contain letters, numbers, dots, underscores, and hyphens")
+        if args.batch or args.batch_fasta:
+            parser.error("--output_name can only be used in direct non-batch single-file runs")
 
     return args
 def make_sample_stem(filename: str) -> str:
@@ -1545,6 +1846,417 @@ def make_sample_stem(filename: str) -> str:
     sample1.fasta -> sample1
     """
     return Path(filename).stem
+
+
+def resolve_output_root(cwd: str, outdir: Optional[str]) -> Optional[str]:
+    """Resolve an optional output root from cwd unless it is absolute."""
+    if not outdir:
+        return None
+
+    path = Path(outdir).expanduser()
+    if not path.is_absolute():
+        path = Path(cwd) / path
+
+    return str(path.resolve())
+
+
+def resolve_single_sample_output_paths(
+    filename: str,
+    default_reports_p: str,
+    default_references_p: str,
+    custom_output_root: Optional[str] = None,
+    output_name: Optional[str] = None,
+) -> dict[str, str]:
+    """Resolve per-sample report/reference output directories."""
+    sample_folder = output_name if output_name else make_output_stem(filename, batch=False)
+    sample_root = ''
+
+    if custom_output_root:
+        sample_root = os.path.join(custom_output_root, sample_folder)
+        sample_reports_p = os.path.join(sample_root, 'reports')
+        sample_reference_outputs_p = os.path.join(sample_root, 'references')
+    else:
+        sample_reports_p = os.path.join(default_reports_p, sample_folder)
+        sample_reference_outputs_p = os.path.join(default_references_p, sample_folder)
+
+    return {
+        'sample_folder': sample_folder,
+        'sample_root': sample_root if custom_output_root else '',
+        'sample_reports_p': sample_reports_p,
+        'sample_reference_outputs_p': sample_reference_outputs_p,
+    }
+
+
+def resolve_batch_name(batch_dir: str, timestamp: str, user_batch_name: Optional[str] = None) -> str:
+    """Resolve the batch output directory name."""
+    if user_batch_name is None:
+        return make_run_prefix(batch_dir=batch_dir, timestamp=timestamp)
+
+    batch_name = user_batch_name.strip()
+    if not batch_name:
+        raise ValueError('Batch name cannot be empty')
+
+    if batch_name in {'.', '..'} or '/' in batch_name or '\\' in batch_name:
+        raise ValueError('Batch name must be a single directory name without path separators')
+
+    if re.fullmatch(r'[A-Za-z0-9._-]+', batch_name) is None:
+        raise ValueError('Batch name may only contain letters, numbers, dots, underscores, and hyphens')
+
+    return batch_name
+
+
+def resolve_batch_output_paths(
+    filename: str,
+    default_reports_p: str,
+    default_references_p: str,
+    batch_name: str,
+    custom_output_root: Optional[str] = None,
+) -> dict[str, str]:
+    """Resolve nested batch output directories for one sample."""
+    sample_folder = make_batch_sample_tag(filename)
+
+    if custom_output_root:
+        batch_root = os.path.join(custom_output_root, batch_name)
+        sample_root = os.path.join(batch_root, sample_folder)
+        sample_reports_p = os.path.join(sample_root, 'reports')
+        sample_reference_outputs_p = os.path.join(sample_root, 'references')
+        reports_dir_rel = os.path.join(sample_folder, 'reports')
+    else:
+        batch_reports_root = os.path.join(default_reports_p, batch_name)
+        batch_references_root = os.path.join(default_references_p, batch_name)
+        sample_reports_p = os.path.join(batch_reports_root, sample_folder)
+        sample_reference_outputs_p = os.path.join(batch_references_root, sample_folder)
+        batch_root = batch_reports_root
+        sample_root = sample_reports_p
+        reports_dir_rel = sample_folder
+
+    return {
+        'batch_root': batch_root,
+        'sample_folder': sample_folder,
+        'sample_root': sample_root,
+        'sample_reports_p': sample_reports_p,
+        'sample_reference_outputs_p': sample_reference_outputs_p,
+        'reports_dir_rel': reports_dir_rel,
+    }
+
+
+def run_batch_pipeline(
+    fasta_files: list[str],
+    batch_dir_label: str,
+    search_root_label: str,
+    batch_name: str,
+    config: configparser.ConfigParser,
+    batch_samples_p: str,
+    runs_p: str,
+    references_p: str,
+    reports_p: str,
+    logs_p: str,
+    blasts_p: str,
+    clusters_p: str,
+    metadata_p: str,
+    custom_output_root: Optional[str],
+    replace_outputs: bool,
+    mode: str,
+    single: bool,
+    update_flumut: str,
+    off_apps: list[str] | None,
+    force_apps: list[str] | None,
+    rm_previous: bool,
+    max_len: int,
+    min_len: int,
+    skip_cdhit: bool,
+    write_tool_versions_tsv: bool,
+) -> int:
+    """Run the existing batch pipeline flow for a prepared FASTA list."""
+    if not fasta_files:
+        print(f"No FASTA files found under {search_root_label}")
+        return 1
+
+    print(f"Discovered {len(fasta_files)} FASTA files")
+
+    failures = []
+    results = []
+    successful_flumut_fastas = []
+    batch_tool_versions = {}
+    batch_flumut_error = ''
+
+    print('Batch output name:', batch_name)
+
+    if custom_output_root:
+        batch_prepare_targets = [os.path.join(custom_output_root, batch_name)]
+        batch_artifact_root = os.path.join(custom_output_root, batch_name)
+    else:
+        batch_prepare_targets = [
+            os.path.join(reports_p, batch_name),
+            os.path.join(references_p, batch_name),
+        ]
+        batch_artifact_root = os.path.join(reports_p, batch_name)
+
+    try:
+        prepare_output_targets(batch_prepare_targets, replace_outputs)
+    except FileExistsError as exc:
+        print(str(exc))
+        return 1
+
+    for i, fasta_file in enumerate(fasta_files, start=1):
+        print(f"\n[{i}/{len(fasta_files)}] Processing {fasta_file}")
+        batch_output_paths = resolve_batch_output_paths(
+            fasta_file,
+            reports_p,
+            references_p,
+            batch_name,
+            custom_output_root,
+        )
+        try:
+            result = run_pipeline_for_file(
+                filename=fasta_file,
+                flags_template=flagdict,
+                config=config,
+                samples_p=batch_samples_p,
+                runs_p=runs_p,
+                references_p=references_p,
+                reports_p=batch_output_paths['sample_reports_p'],
+                logs_p=logs_p,
+                blasts_p=blasts_p,
+                clusters_p=clusters_p,
+                metadata_p=metadata_p,
+                reference_output_p=batch_output_paths['sample_reference_outputs_p'],
+                mode=mode,
+                single=single,
+                update_flumut=update_flumut,
+                off_apps=off_apps,
+                force_apps=force_apps,
+                rm_previous=rm_previous,
+                max_len=max_len,
+                min_len=min_len,
+                skip_cdhit=skip_cdhit,
+                batch=True,
+                batch_dir=batch_name,
+                timestamp='',
+                capture_tool_versions=True,
+                write_tool_versions_tsv=False,
+                batch_tool_versions=batch_tool_versions,
+            )
+
+            if not isinstance(result, dict) or 'output_tag' not in result:
+                raise RuntimeError(
+                    f"Pipeline completed without returning output metadata for {fasta_file}"
+                )
+
+            results.append({
+                'input_file': fasta_file,
+                'file_tag': result['output_tag'],
+                'status': 'ok',
+                'error': '',
+                'sample_dir': batch_output_paths['sample_folder'],
+                'reports_dir_rel': batch_output_paths['reports_dir_rel'],
+                **extract_batch_summary_fields(result.get('flags', {})),
+            })
+
+            flumut_input_fp = str(result.get('flumut_input_fp', '')).strip()
+            if flumut_input_fp:
+                successful_flumut_fastas.append(flumut_input_fp)
+
+        except Exception as e:
+            print(f"ERROR processing {fasta_file}: {e}")
+            failures.append((fasta_file, str(e)))
+
+            failed_tag = make_output_stem(
+                fasta_file,
+                batch=True,
+                batch_dir=batch_name,
+                timestamp='',
+            )
+
+            results.append({
+                'input_file': fasta_file,
+                'file_tag': failed_tag,
+                'status': 'failed',
+                'error': str(e),
+                'sample_dir': batch_output_paths['sample_folder'],
+                'reports_dir_rel': batch_output_paths['reports_dir_rel'],
+                **{field: '' for field in _BATCH_SUMMARY_FIELDS if field not in ('input_file', 'file_tag', 'status', 'error', 'sample_dir', 'reports_dir_rel', 'flumut_ran', 'nextclade_ran', 'genin2_ran')},
+                'flumut_ran': 'no',
+                'nextclade_ran': 'no',
+                'genin2_ran': 'no',
+            })
+
+    batch_summary_fp = os.path.join(batch_artifact_root, f"batch_summary_{batch_name}.tsv")
+
+    with open(batch_summary_fp, 'w', encoding='utf-8', newline='') as out:
+        writer = csv.DictWriter(out, fieldnames=_BATCH_SUMMARY_FIELDS, delimiter='\t', extrasaction='ignore')
+        writer.writeheader()
+        for row in results:
+            normalized = {field: row.get(field, '') for field in _BATCH_SUMMARY_FIELDS}
+            writer.writerow(normalized)
+
+    print(f"\nBatch summary written to: {batch_summary_fp}")
+
+    if successful_flumut_fastas:
+        batch_fasta_base = os.path.join(batch_artifact_root, f'{batch_name}_to_flumut_batch_tmp')
+        batch_fasta_fp = f'{batch_fasta_base}.fasta'
+        batch_excel_fp = os.path.join(batch_artifact_root, f'{batch_name}_flumut.xlsx')
+
+        try:
+            concat_fasta(successful_flumut_fastas, batch_fasta_base)
+            run_flumut(
+                reports_p=batch_artifact_root,
+                samples_p=runs_p,
+                file_tag=batch_name,
+                excel_output=batch_excel_fp,
+                write_tsv_outputs=False,
+                input_fasta=batch_fasta_fp,
+                tool_versions=batch_tool_versions,
+                capture_tool_versions=True,
+            )
+        except Exception as exc:
+            batch_flumut_error = str(exc)
+            print(f'Warning: batch-wide FluMut workbook generation failed: {exc}')
+        finally:
+            if os.path.exists(batch_fasta_fp):
+                os.remove(batch_fasta_fp)
+    else:
+        print('Skipping batch-wide FluMut workbook: no successful _to_flumut.fasta inputs were produced.')
+
+    if write_tool_versions_tsv and batch_tool_versions:
+        _write_tool_versions_tsv(batch_artifact_root, batch_name, batch_tool_versions)
+
+    maybe_create_batch_artifacts(batch_artifact_root, batch_summary_fp)
+
+    if failures or batch_flumut_error:
+        print("\nBatch completed with failures:")
+        for fasta_file, err in failures:
+            print(f" - {fasta_file}: {err}")
+        if batch_flumut_error:
+            print(f" - batch-wide FluMut workbook: {batch_flumut_error}")
+        return 1
+
+    print("\nBatch completed successfully")
+    return 0
+
+
+def prepare_output_targets(targets: list[str], replace: bool) -> None:
+    """Create output directories, deleting existing ones only when requested."""
+    seen = set()
+    for target in targets:
+        if not target or target in seen:
+            continue
+        seen.add(target)
+
+        if os.path.exists(target):
+            if not replace:
+                raise FileExistsError(f'Output directory already exists: {target}. Use --replace to overwrite it.')
+
+            if os.path.isdir(target):
+                shutil.rmtree(target)
+            else:
+                raise FileExistsError(f'Output target exists and is not a directory: {target}')
+
+        os.makedirs(target, exist_ok=True)
+
+
+def create_run_workspace(base_runs_p: str) -> str:
+    """Create a unique per-invocation intermediate workspace under runs/."""
+    os.makedirs(base_runs_p, exist_ok=True)
+    return tempfile.mkdtemp(prefix='session_', dir=base_runs_p)
+
+
+def _tool_ran_yes_no(flags: dict, tool_name: str) -> str:
+    """Return ``yes`` when a tool completed, otherwise ``no``."""
+    status = str(flags.get('Tool Status', {}).get(tool_name, {}).get('status', '')).strip().lower()
+    return 'yes' if status == 'completed' else 'no'
+
+
+def _normalize_genin_summary(genin_rows: Any) -> dict[str, str]:
+    """Collapse parsed GenIn2 rows into one batch-summary record."""
+    summary = {
+        'genin2_genotype': '',
+        'genin2_subgenotype': '',
+        'genin2_pb2': '',
+        'genin2_pb1': '',
+        'genin2_pa': '',
+        'genin2_np': '',
+        'genin2_na': '',
+        'genin2_mp': '',
+        'genin2_ns': '',
+    }
+    if not isinstance(genin_rows, list) or not genin_rows:
+        return summary
+
+    segment_map = {
+        'PB2': 'genin2_pb2',
+        'PB1': 'genin2_pb1',
+        'PA': 'genin2_pa',
+        'NP': 'genin2_np',
+        'NA': 'genin2_na',
+        'MP': 'genin2_mp',
+        'NS': 'genin2_ns',
+    }
+
+    def _row_score(row: dict[str, Any]) -> int:
+        return sum(1 for segment in segment_map if str(row.get(segment, '')).strip() not in ('', '?'))
+
+    best_row = None
+    best_score = -1
+    for row in genin_rows:
+        if not isinstance(row, dict):
+            continue
+        score = _row_score(row)
+        if score > best_score:
+            best_row = row
+            best_score = score
+
+    if best_row is None:
+        return summary
+
+    summary['genin2_genotype'] = str(best_row.get('Genotype', '')).strip()
+    summary['genin2_subgenotype'] = str(best_row.get('Sub-genotype', '')).strip()
+
+    for row in genin_rows:
+        if not isinstance(row, dict):
+            continue
+        if not summary['genin2_genotype']:
+            summary['genin2_genotype'] = str(row.get('Genotype', '')).strip()
+        if not summary['genin2_subgenotype']:
+            summary['genin2_subgenotype'] = str(row.get('Sub-genotype', '')).strip()
+        for segment, field in segment_map.items():
+            value = str(row.get(segment, '')).strip()
+            if value in ('', '?') or summary[field]:
+                continue
+            summary[field] = value
+
+    return summary
+
+
+def _format_mutations_of_interest(flags: dict) -> str:
+    """Aggregate all tracked mutations of interest into one semicolon-separated field."""
+    mutations = []
+    seen = set()
+    for segment in ('HA', 'NA', 'PA', 'PB1', 'PB2', 'MP', 'NP', 'NS'):
+        for mut in flags.get('Sample', {}).get(f'{segment}_muts', []):
+            mut = str(mut).strip()
+            if not mut:
+                continue
+            label = muts_loci_meaning.get(mut, (f'{segment}:{mut}', ''))[0]
+            if label not in seen:
+                seen.add(label)
+                mutations.append(label)
+    return ';'.join(sorted(mutations))
+
+
+def extract_batch_summary_fields(flags: dict) -> dict[str, str]:
+    """Build the enriched batch-summary fields from one sample's flags."""
+    sample = flags.get('Sample', {})
+    summary = {
+        'flumut_ran': _tool_ran_yes_no(flags, 'flumut'),
+        'nextclade_ran': _tool_ran_yes_no(flags, 'nextclade'),
+        'genin2_ran': _tool_ran_yes_no(flags, 'genin'),
+        'clade': str(sample.get('clade', '')).strip(),
+        'genotype': str(sample.get('Genotype', '')).strip(),
+        'mutations_of_interest': _format_mutations_of_interest(flags),
+    }
+    summary.update(_normalize_genin_summary(sample.get('Genin_genotypes', [])))
+    return summary
 
 
 def make_run_prefix(batch_dir: str = '', timestamp: str = '') -> str:
@@ -1691,6 +2403,113 @@ def resolve_single_sample_file(samples_p: str, filename: str) -> str:
 
     return str(matches[0])
 
+
+def _compile_batch_fasta_regex(pattern: str) -> re.Pattern[str]:
+    """Compile and validate the mandatory demultiplex regex."""
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"Invalid --bf-regex pattern: {exc}") from exc
+
+    if 'sample' not in compiled.groupindex and compiled.groups < 1:
+        raise ValueError("--bf-regex must define a named group 'sample' or at least one capture group")
+
+    return compiled
+
+
+def _extract_batch_fasta_sample_id(header: str, pattern: re.Pattern[str]) -> Optional[str]:
+    """Extract the demultiplex sample identifier from a FASTA header."""
+    match = pattern.search(header)
+    if match is None:
+        return None
+
+    if 'sample' in pattern.groupindex:
+        sample_id = match.group('sample')
+    else:
+        sample_id = match.group(1)
+
+    sample_id = '' if sample_id is None else str(sample_id).strip()
+    return sample_id or None
+
+
+def _safe_batch_fasta_filename(sample_id: str, used_names: set[str]) -> str:
+    """Convert a sample identifier into a filesystem-safe FASTA basename."""
+    sanitized = sample_id.replace(os.sep, '_').replace('/', '_').strip()
+    sanitized = re.sub(r'[^A-Za-z0-9._-]+', '_', sanitized)
+    sanitized = sanitized.strip('._') or 'sample'
+
+    candidate = sanitized
+    if candidate in used_names:
+        suffix = hashlib.sha1(sample_id.encode('utf-8')).hexdigest()[:10]
+        candidate = f'{sanitized}_{suffix}'
+
+    used_names.add(candidate)
+    return candidate
+
+
+def demultiplex_batch_fasta(input_fasta: str, output_dir: str, regex_pattern: str) -> dict[str, Any]:
+    """Split one multifasta into per-sample FASTAs using a sample-ID regex."""
+    compiled = _compile_batch_fasta_regex(regex_pattern)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    grouped_records: defaultdict[str, list[tuple[str, str]]] = defaultdict(list)
+    unmatched_headers: list[str] = []
+    current_header: Optional[str] = None
+    current_sequence_lines: list[str] = []
+
+    def save_current_record() -> None:
+        nonlocal current_header, current_sequence_lines
+        if current_header is None:
+            return
+
+        sample_id = _extract_batch_fasta_sample_id(current_header, compiled)
+        if sample_id is None:
+            unmatched_headers.append(current_header)
+        else:
+            sequence = ''.join(current_sequence_lines).replace(' ', '').strip()
+            grouped_records[sample_id].append((current_header, sequence))
+
+    with open(input_fasta, 'r', encoding='utf-8') as infile:
+        for raw_line in infile:
+            line = raw_line.rstrip('\n')
+            if not line:
+                continue
+
+            if line.startswith('>'):
+                save_current_record()
+                current_header = line[1:].strip()
+                current_sequence_lines = []
+            else:
+                current_sequence_lines.append(line.strip())
+
+        save_current_record()
+
+    demultipliable = len(grouped_records) > 0 and len(unmatched_headers) == 0
+    written_files: list[str] = []
+    sample_to_file: dict[str, str] = {}
+
+    if demultipliable:
+        used_names: set[str] = set()
+        for sample_id in sorted(grouped_records):
+            safe_name = _safe_batch_fasta_filename(sample_id, used_names)
+            output_fp = output_path / f'{safe_name}.fasta'
+            with open(output_fp, 'w', encoding='utf-8') as out:
+                for header, sequence in grouped_records[sample_id]:
+                    out.write(f'>{header}\n')
+                    for i in range(0, len(sequence), 80):
+                        out.write(f'{sequence[i:i + 80]}\n')
+            written_files.append(str(output_fp))
+            sample_to_file[sample_id] = str(output_fp)
+
+    return {
+        'demultipliable': demultipliable,
+        'sample_ids': sorted(grouped_records.keys()),
+        'unmatched_headers': unmatched_headers,
+        'generated_fastas': written_files,
+        'sample_to_file': sample_to_file,
+    }
+
 def run_pipeline_for_file(
     filename: str,
     flags_template: dict,
@@ -1703,6 +2522,7 @@ def run_pipeline_for_file(
     blasts_p: str,
     clusters_p: str,
     metadata_p: str,
+    reference_output_p: Optional[str],
     mode: str,
     single: bool,
     update_flumut: str,
@@ -1714,7 +2534,11 @@ def run_pipeline_for_file(
     skip_cdhit: bool = False,
     batch: bool = False,
     batch_dir: str = '',
-    timestamp: str = ''
+    timestamp: str = '',
+    output_name: Optional[str] = None,
+    capture_tool_versions: bool = True,
+    write_tool_versions_tsv: bool = False,
+    batch_tool_versions: Optional[dict[str, str]] = None,
 ) -> None:
     """
     Run full AFluID pipeline for one FASTA file.
@@ -1733,6 +2557,12 @@ def run_pipeline_for_file(
     flags = deepcopy(flags_template)
     muts_of_interest = muts_interest
     flags['Master']['single'] = single
+    if batch_tool_versions is not None:
+        tool_versions = batch_tool_versions
+        flags['Tool Versions'] = dict(tool_versions)
+    else:
+        flags.setdefault('Tool Versions', {})
+        tool_versions = flags['Tool Versions']
 
 
     if mode == 'contig':
@@ -1782,6 +2612,14 @@ def run_pipeline_for_file(
         batch_dir=batch_dir,
         timestamp=timestamp,
     )
+    if not batch and output_name:
+        output_tag = output_name
+
+    active_reports_p = reports_p
+    active_reference_output_p = reference_output_p if reference_output_p is not None else references_p
+
+    os.makedirs(active_reports_p, exist_ok=True)
+    os.makedirs(active_reference_output_p, exist_ok=True)
 
     print('Output tag:', output_tag)
 
@@ -1805,7 +2643,8 @@ def run_pipeline_for_file(
         )
     except Exception as exc:
         _set_tool_status(flags, 'preprocess', 'failed', str(exc))
-        _write_flags_json(reports_p, output_tag, flags)
+        flags['Tool Versions'] = dict(tool_versions)
+        _write_flags_json(active_reports_p, output_tag, flags)
         raise
 
     if not mappings:
@@ -1835,7 +2674,9 @@ def run_pipeline_for_file(
             flags,
             num_threads=threads,
             max_tar_seq=num_seqs,
-            fasta=f"format_{output_tag}.fasta"
+            fasta=f"format_{output_tag}.fasta",
+            tool_versions=tool_versions,
+            capture_tool_versions=capture_tool_versions,
         )
         if flags['Master']['L_BLAST']:
             blast_report = reblast(
@@ -1848,14 +2689,16 @@ def run_pipeline_for_file(
                 output_tag,
                 threads=threads,
                 max_tar_seq=num_seqs,
-                fasta=f"{output_tag}_to_reblast.fasta"
+                fasta=f"{output_tag}_to_reblast.fasta",
+                tool_versions=tool_versions,
+                capture_tool_versions=capture_tool_versions,
             )
             report_compiler(
                 cluster_report,
                 runs_p,
                 output_tag,
                 mappings,
-                reports_p,
+                active_reports_p,
                 flags,
                 bclust_dict=blast_cluster,
                 blast_dict=blast_report
@@ -1866,7 +2709,7 @@ def run_pipeline_for_file(
                 runs_p,
                 output_tag,
                 mappings,
-                reports_p,
+                active_reports_p,
                 flags,
                 bclust_dict=blast_cluster
             )
@@ -1878,7 +2721,9 @@ def run_pipeline_for_file(
             float(config["CD-HIT"]["identity"]),
             logs_p,
             log_tag=output_tag,
-            verbose=True
+            verbose=True,
+            tool_versions=tool_versions,
+            capture_tool_versions=capture_tool_versions,
         )
         _set_tool_status(flags, 'cd_hit', 'completed')
 
@@ -1898,10 +2743,10 @@ def run_pipeline_for_file(
             assignments,
             dict_cluster,
             os.path.join(runs_p, f'format_{output_tag}.assign'),
-            reports_p
+            active_reports_p
         )
 
-        cluster_report = cluster_miner(reports_p, output_tag, runs_p, runs_p, flags)
+        cluster_report = cluster_miner(active_reports_p, output_tag, runs_p, runs_p, flags)
 
         if flags['Master']['C_BLAST']:
             blast_cluster = bclust(
@@ -1915,7 +2760,9 @@ def run_pipeline_for_file(
                 flags,
                 num_threads=threads,
                 max_tar_seq=num_seqs,
-                fasta=f"{output_tag}_to_blast.fasta"
+                fasta=f"{output_tag}_to_blast.fasta",
+                tool_versions=tool_versions,
+                capture_tool_versions=capture_tool_versions,
             )
 
             if flags['Master']['L_BLAST']:
@@ -1929,14 +2776,16 @@ def run_pipeline_for_file(
                     output_tag,
                     threads=threads,
                     max_tar_seq=num_seqs,
-                    fasta=f"{output_tag}_to_reblast.fasta"
+                    fasta=f"{output_tag}_to_reblast.fasta",
+                    tool_versions=tool_versions,
+                    capture_tool_versions=capture_tool_versions,
                 )
                 report_compiler(
                     cluster_report,
                     runs_p,
                     output_tag,
                     mappings,
-                    reports_p,
+                    active_reports_p,
                     flags,
                     bclust_dict=blast_cluster,
                     blast_dict=blast_report
@@ -1947,7 +2796,7 @@ def run_pipeline_for_file(
                     runs_p,
                     output_tag,
                     mappings,
-                    reports_p,
+                    active_reports_p,
                     flags,
                     bclust_dict=blast_cluster
                 )
@@ -1957,11 +2806,11 @@ def run_pipeline_for_file(
                 runs_p,
                 output_tag,
                 mappings,
-                reports_p,
+                active_reports_p,
                 flags
             )
 
-    id_report_fp = os.path.join(reports_p, f"{output_tag}_ID_Report.txt")
+    id_report_fp = os.path.join(active_reports_p, f"{output_tag}_ID_Report.txt")
     _require_files([id_report_fp], 'Pipeline identification path did not produce the ID report')
 
     if mode == 'contig' and single:
@@ -1982,7 +2831,7 @@ def run_pipeline_for_file(
         output_tag,
         mappings,
         runs_p,
-        reports_p,
+        active_reports_p,
         force_flumut=flags['Master']['flumut'],
         force_genin=flags['Master']['genin'],
         force_getref=flags['Master']['getref'],
@@ -1991,18 +2840,26 @@ def run_pipeline_for_file(
     )
 
     _set_tool_status(flags, 'flumut', 'skipped', 'FluMut routing not enabled for this sample')
+    flumut_input_fp = os.path.join(runs_p, f'{output_tag}_to_flumut.fasta')
     if flags['Master']['flumut']:
         try:
-            flumut_input_fp = os.path.join(runs_p, f'{output_tag}_to_flumut.fasta')
-            markers_fp = os.path.join(reports_p, f'{output_tag}_markers.tsv')
-            mutations_fp = os.path.join(reports_p, f'{output_tag}_mutations.tsv')
+            markers_fp = os.path.join(active_reports_p, f'{output_tag}_markers.tsv')
+            mutations_fp = os.path.join(active_reports_p, f'{output_tag}_mutations.tsv')
+            excel_output_fp = None if batch else os.path.join(active_reports_p, f'{output_tag}_flumut.xlsx')
             conform_to_flumut(flags, runs_p, output_tag)
             _require_files([flumut_input_fp], 'FluMut preparation did not produce the expected input FASTA')
             if update_flumut.upper() == 'ON':
-                update_flumut_db()
-            run_flumut(reports_p, runs_p, output_tag)
+                update_flumut_db(tool_versions=tool_versions, capture_tool_versions=capture_tool_versions)
+            run_flumut(
+                active_reports_p,
+                runs_p,
+                output_tag,
+                excel_output=excel_output_fp,
+                tool_versions=tool_versions,
+                capture_tool_versions=capture_tool_versions,
+            )
             _require_files([markers_fp, mutations_fp], 'FluMut did not produce the expected report files')
-            remap_flumut_report(reports_p, mappings, output_tag)
+            remap_flumut_report(active_reports_p, mappings, output_tag)
             mut_miner(markers_fp, muts_of_interest, flags)
             _set_tool_status(flags, 'flumut', 'completed')
         except Exception as exc:
@@ -2016,28 +2873,36 @@ def run_pipeline_for_file(
     if flags['Master']['nextclade']:
         try:
             fasta_to_nextclade(flags, runs_p, output_tag)
-            run_nextclade(f'{output_tag}_to_nextclade', flags, reports_p, runs_p, output_tag)
+            run_nextclade(
+                f'{output_tag}_to_nextclade',
+                flags,
+                active_reports_p,
+                runs_p,
+                output_tag,
+                tool_versions=tool_versions,
+                capture_tool_versions=capture_tool_versions,
+            )
 
             if flags['Final Report']['Sequences for NextClade']['H1'] != []:
-                remap_nextclade(reports_p, f"{output_tag}_H1_nextclade.tsv", mappings)
+                remap_nextclade(active_reports_p, f"{output_tag}_H1_nextclade.tsv", mappings)
                 flags['Sample']['clade'] = mine_clade(
-                    os.path.join(reports_p, f"{output_tag}_H1_nextclade.tsv"),
+                    os.path.join(active_reports_p, f"{output_tag}_H1_nextclade.tsv"),
                     flags,
                     mappings
                 )
 
             if flags['Final Report']['Sequences for NextClade']['H3'] != []:
-                remap_nextclade(reports_p, f"{output_tag}_H3_nextclade.tsv", mappings)
+                remap_nextclade(active_reports_p, f"{output_tag}_H3_nextclade.tsv", mappings)
                 flags['Sample']['clade'] = mine_clade(
-                    os.path.join(reports_p, f"{output_tag}_H3_nextclade.tsv"),
+                    os.path.join(active_reports_p, f"{output_tag}_H3_nextclade.tsv"),
                     flags,
                     mappings
                 )
 
             if flags['Final Report']['Sequences for NextClade']['H5'] != []:
-                remap_nextclade(reports_p, f"{output_tag}_H5_nextclade.tsv", mappings)
+                remap_nextclade(active_reports_p, f"{output_tag}_H5_nextclade.tsv", mappings)
                 flags['Sample']['clade'] = mine_clade(
-                    os.path.join(reports_p, f"{output_tag}_H5_nextclade.tsv"),
+                    os.path.join(active_reports_p, f"{output_tag}_H5_nextclade.tsv"),
                     flags,
                     mappings
                 )
@@ -2053,6 +2918,7 @@ def run_pipeline_for_file(
         get_reference(
             flags['Final Report']['Get References'],
             references_p,
+            active_reference_output_p,
             config['Filenames']['ref_db'],
             output_tag,
             email=config['getref']['email'],
@@ -2067,7 +2933,6 @@ def run_pipeline_for_file(
         flags['Master']['genin']= False
 
     if flags['Master']['genin']:
-        # GenIn2 currently consumes the same filtered FASTA prepared for FluMut.
         flags['Final Report']['Sequences for GenIn'] = list(
             dict.fromkeys(flags['Final Report']['Sequences for FluMut'])
         )
@@ -2077,20 +2942,29 @@ def run_pipeline_for_file(
     _set_tool_status(flags, 'genin', 'skipped', 'GenIn2 routing not enabled for this sample')
     if flags['Master']['genin']:
         try:
-            genin_fp = os.path.join(reports_p, f'{output_tag}_genin.tsv')
-            _require_files([os.path.join(runs_p, f'{output_tag}_to_flumut.fasta')], 'GenIn2 requires the FluMut-formatted FASTA input')
-            run_genin2(runs_p, output_tag, genin_fp)
+            genin_fp = os.path.join(active_reports_p, f'{output_tag}_genin.tsv')
+            genin_input_fp = os.path.join(runs_p, f'{output_tag}_to_genin.fasta')
+            conform_to_genin(flags, mappings, runs_p, output_tag)
+            _require_files([genin_input_fp], 'GenIn2 preparation did not produce the expected input FASTA')
+            run_genin2(
+                runs_p,
+                output_tag,
+                genin_fp,
+                tool_versions=tool_versions,
+                capture_tool_versions=capture_tool_versions,
+            )
             _require_files([genin_fp], 'GenIn2 did not produce the expected report file')
-            remap_genin2(reports_p, f'{output_tag}_genin.tsv', mappings, flags)
+            remap_genin2(active_reports_p, f'{output_tag}_genin.tsv', mappings, flags)
             _set_tool_status(flags, 'genin', 'completed')
         except Exception as exc:
             flags['Master']['genin'] = False
             flags['Final Report']['Sequences for GenIn'] = []
-            flags['Sample']['Genin_genotypes'] = {}
+            flags['Sample']['Genin_genotypes'] = []
             _set_tool_status(flags, 'genin', 'failed', str(exc))
             print(f'Warning: skipping GenIn2 for {output_tag}: {exc}')
 
-    _write_flags_json(reports_p, output_tag, flags)
+    flags['Tool Versions'] = dict(tool_versions)
+    _write_flags_json(active_reports_p, output_tag, flags)
 
     if mode == 'consensus':
         _require_files([id_report_fp], 'Final report generation requires the ID report')
@@ -2102,22 +2976,28 @@ def run_pipeline_for_file(
                 mappings,
                 muts_loci_meaning,
                 html_skeleton,
-                os.path.join(reports_p, f'{output_tag}_final_report.html'),
+                os.path.join(active_reports_p, f'{output_tag}_final_report.html'),
                 f'{output_tag}_final_report',
                 runs_p=runs_p
                 )
             _set_tool_status(flags, 'final_report', 'completed')
         except Exception as exc:
             _set_tool_status(flags, 'final_report', 'failed', str(exc))
-            _write_flags_json(reports_p, output_tag, flags)
+            flags['Tool Versions'] = dict(tool_versions)
+            _write_flags_json(active_reports_p, output_tag, flags)
             raise
-        _write_flags_json(reports_p, output_tag, flags)
+        flags['Tool Versions'] = dict(tool_versions)
+        _write_flags_json(active_reports_p, output_tag, flags)
+
+    if write_tool_versions_tsv and not batch and tool_versions:
+        _write_tool_versions_tsv(active_reports_p, output_tag, tool_versions)
 
     print(f'Finished: {filename}')
     return {
         'flags': flags,
         'output_tag': output_tag,
         'mode': mode,
+        'flumut_input_fp': flumut_input_fp if flags['Tool Status'].get('flumut', {}).get('status') == 'completed' else '',
     }
 def main(flagdict: dict = flagdict) -> None:
     """Main entry point for the pipeline."""
@@ -2131,6 +3011,10 @@ def main(flagdict: dict = flagdict) -> None:
     force_apps = args.force
     single = args.single_sample.lower() == 'on'
     skip_cdhit = args.skip_cdhit
+    requested_output_name = args.output_name
+    write_tool_versions_tsv = args.tool_versions
+    custom_output_root = resolve_output_root(cwd, args.outdir)
+    replace_outputs = args.replace
 
     config = configparser.ConfigParser()
     read_files = config.read(config_file)
@@ -2158,7 +3042,7 @@ def main(flagdict: dict = flagdict) -> None:
     rm_previous = config['Functions']['remove_previous'] if args.remove_previous.lower() == 'on' else False
 
     samples_p = os.path.abspath(os.path.join(cwd, samples))
-    runs_p = os.path.abspath(os.path.join(cwd, runs))
+    runs_root_p = os.path.abspath(os.path.join(cwd, runs))
     references_p = os.path.abspath(os.path.join(cwd, references))
     reports_p = os.path.abspath(os.path.join(cwd, reports))
     logs_p = os.path.abspath(os.path.join(cwd, logs))
@@ -2179,17 +3063,23 @@ def main(flagdict: dict = flagdict) -> None:
     print('Min sequence length:', min_len)
     print('Skip CD-HIT:', skip_cdhit)
     print('Batch directory:', args.batch_dir if args.batch_dir else '.')
+    print('Output directory:', custom_output_root if custom_output_root else 'default config paths')
+    print('Replace outputs:', replace_outputs)
 
     # Check required paths
-    for pth, label in [
+    required_paths = [
         (samples_p, "Samples"),
-        (runs_p, "Runs"),
+        (runs_root_p, "Runs"),
         (references_p, "References"),
-        (reports_p, "Reports"),
         (blasts_p, "Blast database"),
         (clusters_p, "Cluster database"),
         (metadata_p, "Metadata"),
-    ]:
+    ]
+
+    if args.batch or not custom_output_root:
+        required_paths.append((reports_p, "Reports"))
+
+    for pth, label in required_paths:
         if not os.path.exists(pth):
             print(f"{label} path does not exist: {pth}")
             sys.exit(1)
@@ -2200,9 +3090,13 @@ def main(flagdict: dict = flagdict) -> None:
     # Optional cleanup
     if rm_previous:
         # Clean runs directory
-        for file in glob.glob(os.path.join(runs_p, "*")):
+        for file in glob.glob(os.path.join(runs_root_p, "*")):
             if os.path.isfile(file):
                 os.remove(file)
+
+        for run_dir in glob.glob(os.path.join(runs_root_p, "session_*")):
+            if os.path.isdir(run_dir):
+                shutil.rmtree(run_dir, ignore_errors=True)
 
         # Clean generated FASTA/helper files in samples directory root
         for pattern in [
@@ -2219,140 +3113,186 @@ def main(flagdict: dict = flagdict) -> None:
                 if os.path.isfile(file):
                     os.remove(file)
 
-    # Batch mode
-    if args.batch:
-        try:
-            fasta_files = find_fasta_files(samples_p, batch_dir=args.batch_dir, recursive=True)
-        except Exception as e:
-            print(f"Could not scan batch directory: {e}")
-            sys.exit(1)
-
-        if not fasta_files:
-            batch_target = args.batch_dir if args.batch_dir else '.'
-            print(f"No FASTA files found under samples/{batch_target}")
-            sys.exit(1)
-
-        print(f"Discovered {len(fasta_files)} FASTA files")
-
-        failures = []
-        results = []
-
-        batch_label = args.batch_dir.strip().replace(os.sep, "_").replace("/", "_") if args.batch_dir else "batch_root"
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-
-        for i, fasta_file in enumerate(fasta_files, start=1):
-            print(f"\n[{i}/{len(fasta_files)}] Processing {fasta_file}")
+    active_runs_p = create_run_workspace(runs_root_p)
+    run_succeeded = False
+    try:
+        # Batch mode
+        if args.batch:
             try:
-                result = run_pipeline_for_file(
-                    filename=fasta_file,
-                    flags_template=flagdict,
-                    config=config,
-                    samples_p=samples_p,
-                    runs_p=runs_p,
-                    references_p=references_p,
-                    reports_p=reports_p,
-                    logs_p=logs_p,
-                    blasts_p=blasts_p,
-                    clusters_p=clusters_p,
-                    metadata_p=metadata_p,
-                    mode=mode,
-                    single=single,
-                    update_flumut=update_flumut,
-                    off_apps=off_apps,
-                    force_apps=force_apps,
-                    rm_previous=rm_previous,
-                    max_len=max_len,
-                    min_len=min_len,
-                    skip_cdhit=skip_cdhit,
-                    batch=True,
-                    batch_dir=batch_label,
-                    timestamp=timestamp
+                fasta_files = find_fasta_files(samples_p, batch_dir=args.batch_dir, recursive=True)
+            except Exception as e:
+                print(f"Could not scan batch directory: {e}")
+                sys.exit(1)
+
+            batch_label = args.batch_dir.strip().replace(os.sep, "_").replace("/", "_") if args.batch_dir else "batch_root"
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            try:
+                batch_name = resolve_batch_name(args.batch_dir, timestamp, args.batch_name)
+            except ValueError as exc:
+                print(str(exc))
+                sys.exit(1)
+
+            exit_code = run_batch_pipeline(
+                fasta_files=fasta_files,
+                batch_dir_label=args.batch_dir,
+                search_root_label=f"samples/{args.batch_dir}" if args.batch_dir else 'samples/.',
+                batch_name=batch_name,
+                config=config,
+                batch_samples_p=samples_p,
+                runs_p=active_runs_p,
+                references_p=references_p,
+                reports_p=reports_p,
+                logs_p=logs_p,
+                blasts_p=blasts_p,
+                clusters_p=clusters_p,
+                metadata_p=metadata_p,
+                custom_output_root=custom_output_root,
+                replace_outputs=replace_outputs,
+                mode=mode,
+                single=single,
+                update_flumut=update_flumut,
+                off_apps=off_apps,
+                force_apps=force_apps,
+                rm_previous=rm_previous,
+                max_len=max_len,
+                min_len=min_len,
+                skip_cdhit=skip_cdhit,
+                write_tool_versions_tsv=write_tool_versions_tsv,
+            )
+            if exit_code != 0:
+                sys.exit(exit_code)
+            run_succeeded = True
+            return
+
+        # Single-file mode
+        try:
+            resolved_filename = resolve_single_sample_file(samples_p, args.filename)
+        except Exception as e:
+            print(f"Could not resolve sample file: {e}")
+            sys.exit(1)
+
+        effective_output_name = requested_output_name
+        if args.batch_fasta:
+            temp_batch_dir = tempfile.mkdtemp(prefix='batch_fasta_', dir=active_runs_p)
+            try:
+                demux_report = demultiplex_batch_fasta(
+                    os.path.join(samples_p, resolved_filename),
+                    temp_batch_dir,
+                    args.bf_regex,
                 )
 
-                if not isinstance(result, dict) or 'output_tag' not in result:
-                    raise RuntimeError(
-                        f"Pipeline completed without returning output metadata for {fasta_file}"
+                if demux_report['demultipliable']:
+                    temp_fasta_files = find_fasta_files(temp_batch_dir, recursive=True)
+                    batch_label = make_sample_stem(resolved_filename)
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    try:
+                        batch_name = resolve_batch_name(batch_label, timestamp, args.batch_name)
+                    except ValueError as exc:
+                        print(str(exc))
+                        sys.exit(1)
+
+                    exit_code = run_batch_pipeline(
+                        fasta_files=temp_fasta_files,
+                        batch_dir_label=batch_label,
+                        search_root_label='temporary batch-fasta workspace',
+                        batch_name=batch_name,
+                        config=config,
+                        batch_samples_p=temp_batch_dir,
+                        runs_p=active_runs_p,
+                        references_p=references_p,
+                        reports_p=reports_p,
+                        logs_p=logs_p,
+                        blasts_p=blasts_p,
+                        clusters_p=clusters_p,
+                        metadata_p=metadata_p,
+                        custom_output_root=custom_output_root,
+                        replace_outputs=replace_outputs,
+                        mode=mode,
+                        single=True,
+                        update_flumut=update_flumut,
+                        off_apps=off_apps,
+                        force_apps=force_apps,
+                        rm_previous=rm_previous,
+                        max_len=max_len,
+                        min_len=min_len,
+                        skip_cdhit=skip_cdhit,
+                        write_tool_versions_tsv=write_tool_versions_tsv,
+                    )
+                    if exit_code != 0:
+                        sys.exit(exit_code)
+                    run_succeeded = True
+                    return
+
+                if not args.force_bf:
+                    unmatched = demux_report['unmatched_headers']
+                    preview = ', '.join(unmatched[:3])
+                    extra = '' if len(unmatched) <= 3 else f' (+{len(unmatched) - 3} more)'
+                    raise ValueError(
+                        f"Input FASTA is not demultipliable with --bf-regex; {len(unmatched)} header(s) failed to match: {preview}{extra}"
                     )
 
-                results.append({
-                    'input_file': fasta_file,
-                    'file_tag': result['output_tag'],
-                    'status': 'ok',
-                    'error': ''
-                })
-
+                if args.batch_name:
+                    print('Ignoring --batch_name because demultiplexing failed and --force-bf switched to multi-sample mode.')
+                effective_output_name = None
+                single = False
             except Exception as e:
-                print(f"ERROR processing {fasta_file}: {e}")
-                failures.append((fasta_file, str(e)))
+                shutil.rmtree(temp_batch_dir, ignore_errors=True)
+                print(f"Batch FASTA preprocessing failed: {e}")
+                sys.exit(1)
+            finally:
+                shutil.rmtree(temp_batch_dir, ignore_errors=True)
 
-                failed_tag = make_output_stem(
-                    fasta_file,
-                    batch=True,
-                    batch_dir=batch_label,
-                    timestamp=timestamp,
-                )
-
-                results.append({
-                    'input_file': fasta_file,
-                    'file_tag': failed_tag,
-                    'status': 'failed',
-                    'error': str(e)
-                })
-
-        batch_summary_fp = os.path.join(
+        sample_output_paths = resolve_single_sample_output_paths(
+            resolved_filename,
             reports_p,
-            f"batch_summary_{batch_label}_{timestamp}.tsv"
+            references_p,
+            custom_output_root,
+            output_name=effective_output_name,
         )
 
-        with open(batch_summary_fp, 'w') as out:
-            out.write('input_file\tfile_tag\tstatus\terror\n')
-            for row in results:
-                out.write(f"{row['input_file']}\t{row['file_tag']}\t{row['status']}\t{row['error']}\n")
+        single_prepare_targets = [sample_output_paths['sample_root']] if custom_output_root else [
+            sample_output_paths['sample_reports_p'],
+            sample_output_paths['sample_reference_outputs_p'],
+        ]
 
-        print(f"\nBatch summary written to: {batch_summary_fp}")
-
-        maybe_create_batch_artifacts(reports_p, batch_summary_fp)
-
-        if failures:
-            print("\nBatch completed with failures:")
-            for fasta_file, err in failures:
-                print(f" - {fasta_file}: {err}")
+        try:
+            prepare_output_targets(single_prepare_targets, replace_outputs)
+        except FileExistsError as exc:
+            print(str(exc))
             sys.exit(1)
 
-        print("\nBatch completed successfully")
-        return
-
-    # Single-file mode
-    try:
-        resolved_filename = resolve_single_sample_file(samples_p, args.filename)
-    except Exception as e:
-        print(f"Could not resolve sample file: {e}")
-        sys.exit(1)
-
-    run_pipeline_for_file(
-        filename=resolved_filename,
-        flags_template=flagdict,
-        config=config,
-        samples_p=samples_p,
-        runs_p=runs_p,
-        references_p=references_p,
-        reports_p=reports_p,
-        logs_p=logs_p,
-        blasts_p=blasts_p,
-        clusters_p=clusters_p,
-        metadata_p=metadata_p,
-        mode=mode,
-        single=single,
-        update_flumut=update_flumut,
-        off_apps=off_apps,
-        force_apps=force_apps,
-        rm_previous=rm_previous,
-        max_len=max_len,
-        min_len=min_len,
-        skip_cdhit=skip_cdhit,
-        batch=False,
-        batch_dir='',
-        timestamp=''
-    )
+        run_pipeline_for_file(
+            filename=resolved_filename,
+            flags_template=flagdict,
+            config=config,
+            samples_p=samples_p,
+            runs_p=active_runs_p,
+            references_p=references_p,
+            reports_p=sample_output_paths['sample_reports_p'],
+            logs_p=logs_p,
+            blasts_p=blasts_p,
+            clusters_p=clusters_p,
+            metadata_p=metadata_p,
+            reference_output_p=sample_output_paths['sample_reference_outputs_p'],
+            mode=mode,
+            single=single,
+            update_flumut=update_flumut,
+            off_apps=off_apps,
+            force_apps=force_apps,
+            rm_previous=rm_previous,
+            max_len=max_len,
+            min_len=min_len,
+            skip_cdhit=skip_cdhit,
+            batch=False,
+            batch_dir='',
+            timestamp='',
+            output_name=effective_output_name,
+            capture_tool_versions=True,
+            write_tool_versions_tsv=write_tool_versions_tsv,
+        )
+        run_succeeded = True
+    finally:
+        if run_succeeded:
+            shutil.rmtree(active_runs_p, ignore_errors=True)
 if __name__=='__main__':
     main()

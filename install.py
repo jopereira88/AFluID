@@ -79,8 +79,10 @@ if __name__ == '__main__':
     config = configparser.ConfigParser()
     config.read(config_file)
     cwd=os.getcwd()
+    if 'update_reports' not in config['Paths']:
+        config['Paths']['update_reports'] = 'update/reports'
     #check if required paths exist
-    for path in ['samples', 'runs', 'references', 'reports', 'logs', 'blast_database', 'cluster_database', 'metadata','update']:
+    for path in ['samples', 'runs', 'references', 'reports', 'update_reports', 'logs', 'blast_database', 'cluster_database', 'metadata','update']:
         full_path = os.path.abspath(os.path.join(cwd, config['Paths'][path]))
         os.makedirs(full_path, exist_ok=True)
         # Update config object in memory so subsequent calls use the full path

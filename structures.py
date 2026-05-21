@@ -13,13 +13,14 @@ iav_segments=("PB2","PB1","PA","HA","NP","NA","MP","NS")
 contig_single_min_floor_bp=125
 contig_single_min_step_bp=50
 flagdict={"Fasta Preprocess":{"Rejected Sequences":[]},"Master":{"C_BLAST":True,"L_BLAST":True,"flumut":True,"genin":True,"nextclade":True,"getref":False,"single":True}, 
+          "Tool Versions":{},
           "CD-HIT":{"Unclustered Sequences":[]},
           "BLAST":{"Sequences unassigned against cluster representatives":[],"Sequences unassigned against local database":[]},
           'Sample':{'HA':[],'NA':[],'PB2':[],'PB1':[],'PA':[],'NP':[],'MP':[],'NS':[],'Genotype':'','HA_ref':[],'NA_ref':[],
                      'PB2_ref':[],'PB1_ref':[], 'PA_ref':[], 'NP_ref':[],'MP_ref':[],'NS_ref':[],'PB2_len':0,'PB1_len':0,
                      'PA_len':0,'HA_len':0,'NP_len':0,'MP_len':0,'NA_len':0,'NS_len':0,'H_gen':'','N_gen':'',"clade":'','HA_muts':[],
                      'NA_muts':[],'PB2_muts':[],'PB1_muts':[],'PA_muts':[],'NP_muts':[],'MP_muts':[],'NS_muts':[],
-                     'Genin_genotypes':{},
+                     'Genin_genotypes':[],
                      # contig + single-sample: selected best contig per segment (internal IDs)
                      'best_segments':{seg: None for seg in iav_segments},
                      'best_segments_min_len':0,

@@ -495,6 +495,34 @@ def _derive_batch_artifact_names(batch_summary_fp: str) -> tuple[str, str]:
     return index_name, zip_name
 
 
+def _get_row_reports_dir_rel(row: dict[str, str]) -> str:
+    """Resolve the per-sample reports directory relative to the batch root."""
+    reports_dir_rel = str(row.get("reports_dir_rel", "")).strip()
+    if reports_dir_rel:
+        return reports_dir_rel
+
+    sample_dir = str(row.get("sample_dir", "")).strip()
+    if sample_dir:
+        return sample_dir
+
+    return ""
+
+
+def _build_batch_row_paths(batch_root: str, row: dict[str, str]) -> tuple[str, str]:
+    """Return the absolute and relative reports directory for a batch row."""
+    reports_dir_rel = _get_row_reports_dir_rel(row)
+    reports_dir_abs = os.path.join(batch_root, reports_dir_rel) if reports_dir_rel else batch_root
+    return reports_dir_abs, reports_dir_rel
+
+
+def _join_rel_path(*parts: str) -> str:
+    """Join relative path fragments using forward slashes for HTML and ZIP output."""
+    clean_parts = [part for part in parts if part]
+    if not clean_parts:
+        return ""
+    return os.path.join(*clean_parts).replace(os.sep, "/")
+
+
 def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: Optional[list[dict[str, str]]] = None, output_name: str = "batch_index.html") -> str:
     """
     Create an HTML landing page for batch outputs.
@@ -502,7 +530,7 @@ def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: 
     Parameters
     ----------
     reports_p : str
-        Directory containing generated report files.
+        Batch root containing generated report files.
     ok_rows : list[dict]
         Summary rows for successful samples.
     all_rows : list[dict], optional
@@ -581,31 +609,37 @@ def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: 
         final_report = f"{file_tag}_final_report.html"
         id_report = f"{file_tag}_ID_Report.txt"
         flags_json = f"{file_tag}_flags.json"
+        reports_dir_abs, reports_dir_rel = _build_batch_row_paths(reports_p, row)
 
         is_ok = (input_file, file_tag) in ok_lookup and status == "ok"
 
-        if is_ok and os.path.exists(os.path.join(reports_p, final_report)):
-            final_report_link = f'<a href="{escape(final_report)}">{escape(final_report)}</a>'
+        final_report_rel = _join_rel_path(reports_dir_rel, final_report)
+        id_report_rel = _join_rel_path(reports_dir_rel, id_report)
+        flags_rel = _join_rel_path(reports_dir_rel, flags_json)
+
+        if is_ok and os.path.exists(os.path.join(reports_dir_abs, final_report)):
+            final_report_link = f'<a href="{escape(final_report_rel)}">{escape(final_report)}</a>'
         else:
             final_report_link = '<span class="missing">missing</span>'
 
-        if is_ok and os.path.exists(os.path.join(reports_p, id_report)):
-            id_report_link = f'<a href="{escape(id_report)}">{escape(id_report)}</a>'
+        if is_ok and os.path.exists(os.path.join(reports_dir_abs, id_report)):
+            id_report_link = f'<a href="{escape(id_report_rel)}">{escape(id_report)}</a>'
         else:
             id_report_link = '<span class="missing">missing</span>'
 
-        if is_ok and os.path.exists(os.path.join(reports_p, flags_json)):
-            flags_link = f'<a href="{escape(flags_json)}">{escape(flags_json)}</a>'
+        if is_ok and os.path.exists(os.path.join(reports_dir_abs, flags_json)):
+            flags_link = f'<a href="{escape(flags_rel)}">{escape(flags_json)}</a>'
         else:
             flags_link = '<span class="missing">missing</span>'
 
         extras = []
-        if file_tag:
-            for fname in sorted(os.listdir(reports_p)):
+        if file_tag and os.path.isdir(reports_dir_abs):
+            for fname in sorted(os.listdir(reports_dir_abs)):
                 if fname.startswith(f"{file_tag}_") and fname not in {final_report, id_report, flags_json}:
-                    full = os.path.join(reports_p, fname)
+                    full = os.path.join(reports_dir_abs, fname)
                     if os.path.isfile(full):
-                        extras.append(f'<a href="{escape(fname)}">{escape(fname)}</a>')
+                        fname_rel = _join_rel_path(reports_dir_rel, fname)
+                        extras.append(f'<a href="{escape(fname_rel)}">{escape(fname)}</a>')
 
         extras_html = "<br>".join(extras) if extras else '<span class="missing">none</span>'
         status_html = escape(status) if status != "failed" else f'<span class="failed">{escape(status)}</span>'
@@ -640,7 +674,7 @@ def create_batch_zip(reports_p: str, ok_rows: list[dict[str, str]], zip_name: st
     Parameters
     ----------
     reports_p : str
-        Directory containing generated report files.
+        Batch root containing generated report files.
     ok_rows : list[dict]
         Summary rows for successful samples.
     zip_name : str, default "batch_reports.zip"
@@ -657,30 +691,35 @@ def create_batch_zip(reports_p: str, ok_rows: list[dict[str, str]], zip_name: st
         extra_files = []
 
     zip_fp = os.path.join(reports_p, zip_name)
-    files_to_add = set()
+    files_to_add: dict[str, str] = {}
 
     for row in ok_rows:
         file_tag = str(row.get("file_tag", "")).strip()
         if not file_tag:
             continue
 
-        for fname in os.listdir(reports_p):
+        reports_dir_abs, reports_dir_rel = _build_batch_row_paths(reports_p, row)
+        if not os.path.isdir(reports_dir_abs):
+            continue
+
+        for fname in os.listdir(reports_dir_abs):
             if fname.startswith(f"{file_tag}_"):
-                full = os.path.join(reports_p, fname)
+                full = os.path.join(reports_dir_abs, fname)
                 if os.path.isfile(full):
-                    files_to_add.add(fname)
+                    arcname = _join_rel_path(reports_dir_rel, fname)
+                    files_to_add[arcname] = full
 
     for fname in extra_files:
         full = os.path.join(reports_p, fname)
         if os.path.isfile(full):
-            files_to_add.add(fname)
+            files_to_add[fname] = full
 
     if not files_to_add:
         return None
 
     with zipfile.ZipFile(zip_fp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for fname in sorted(files_to_add):
-            zf.write(os.path.join(reports_p, fname), arcname=fname)
+        for arcname in sorted(files_to_add):
+            zf.write(files_to_add[arcname], arcname=arcname)
 
     return zip_fp
 
@@ -1152,7 +1191,7 @@ def create_genin_const_table(flags: dict) -> str:
     str
         HTML fragment containing either a results table or an empty-state card.
     """
-    genin_const = flags['Sample'].get('Genin_genotypes', {})
+    genin_const = flags['Sample'].get('Genin_genotypes', [])
 
     if not genin_const:
         return """
@@ -1166,28 +1205,72 @@ def create_genin_const_table(flags: dict) -> str:
       <thead>
         <tr>
           <th>Sample Name</th>
-          <th>Segment</th>
           <th>Genotype</th>
           <th>Sub-genotype</th>
-          <th>Constellation Number</th>
+          <th>PB2</th>
+          <th>PB1</th>
+          <th>PA</th>
+          <th>NP</th>
+          <th>NA</th>
+          <th>MP</th>
+          <th>NS</th>
+          <th>Notes</th>
         </tr>
       </thead>
       <tbody>
     """
 
-    for sample_name, data in genin_const.items():
-        segment = data.get('segment', '')
+    if isinstance(genin_const, dict):
+        # Backward compatibility for previously serialized flags.
+        rows = []
+        for sample_name, data in genin_const.items():
+            row = {
+                'Sample Name': sample_name,
+                'Genotype': data.get('Genotype', ''),
+                'Sub-genotype': data.get('Sub-genotype', ''),
+                'PB2': '',
+                'PB1': '',
+                'PA': '',
+                'NP': '',
+                'NA': '',
+                'MP': '',
+                'NS': '',
+                'Notes': '',
+            }
+            segment = data.get('segment', '')
+            value = data.get('value', '')
+            if segment in ('PB2', 'PB1', 'PA', 'NP', 'NA', 'MP', 'NS'):
+                row[segment] = value
+            rows.append(row)
+    else:
+        rows = genin_const
+
+    for data in rows:
+        sample_name = data.get('Sample Name', '')
         genotype = data.get('Genotype', '')
         sub_genotype = data.get('Sub-genotype', '')
-        value = data.get('value', '')
+        pb2 = data.get('PB2', '')
+        pb1 = data.get('PB1', '')
+        pa = data.get('PA', '')
+        np = data.get('NP', '')
+        na = data.get('NA', '')
+        mp = data.get('MP', '')
+        ns = data.get('NS', '')
+        notes = data.get('Notes', '')
 
         table += f"""
         <tr>
           <td>{sample_name}</td>
-          <td>{segment}</td>
           <td>{genotype}</td>
           <td>{sub_genotype}</td>
-          <td>{value}</td>
+          <td>{pb2}</td>
+          <td>{pb1}</td>
+          <td>{pa}</td>
+          <td>{np}</td>
+          <td>{na}</td>
+          <td>{mp}</td>
+          <td>{ns}</td>
+          <td>{notes}</td>
         </tr>
         """
 

@@ -57,15 +57,53 @@ The pipeline also runs 2 different modes and its behaviour can be altered by sev
     This argument allows the user to turn off specific tools thar could be turned on by default.
 * Remove previous (*argument: -rm/--remove_previous (on/off) - default:on*):
     The pipline profuces intermediate outputs on the ```runs/``` and ```samples/``` paths. this will clear those files in the beginning of each run. If you are running batch or parallell analysis, turn off this feature.
+* Output directory (*argument: --outdir PATH*):
+     Report outputs and exported reference files can be redirected to a custom root directory. Relative paths are resolved from the current working directory; absolute paths are accepted as-is.
+* Output name (*argument: -o/--output_name NAME*):
+     In direct single-file runs, this optionally overrides the default output stem used for the output folder and generated report filenames in both ```-ss on``` and ```-ss off``` modes. The name is used exactly as provided, without timestamps or hex suffixes, so an existing target raises an error unless ```--replace``` is used. This option cannot be used with ```--batch``` or ```--batch_fasta```.
+* Batch name (*argument: -bn/--batch_name NAME*):
+     In batch mode or successful batch-fasta demultiplexing, this defines the batch output directory name. If omitted, AFluID uses the current timestamped batch naming behaviour. If ```--batch_fasta``` falls back to multi-sample mode through ```--force-bf```, ```--batch_name``` is ignored.
+* Batch FASTA demultiplexing (*arguments: -bf/--batch_fasta, --bf-regex REGEX, --force-bf*):
+     This optional mode allows AFluID to inspect one multifasta input, gather records by a repeated sample identifier captured by a user-provided regex, and run the result as batch single-sample mode. ```--bf-regex``` is mandatory with ```--batch_fasta``` and must capture only the sample identifier, either with a named group ``sample`` or with the first capture group. If every header matches, the file is demultiplexed and processed as ```-b -ss on```. If any header fails, the run stops unless ```--force-bf``` is provided, in which case the original file is processed as a multi-sample FASTA (effective ```-ss off```). Original FASTA headers are preserved unchanged in the demultiplexed files. Demultiplexed FASTA filenames are sanitized to filesystem-safe names derived from the captured sample identifier, and a short deterministic suffix is added only if two captured identifiers would otherwise collide on disk.
+* Replace outputs (*argument: --replace*):
+     Prevent accidental overwrites by default. If the target output directory already exists, the run will fail unless ```--replace``` is provided, in which case the existing output directory is deleted and recreated before the run starts.
 
 To run the pipeline **place the sample fasta files in the ```samples/``` folder**. You only need to specify the name of the file to be analysed as the pipeline will automatically search for the sample files in the ```samples/``` folder
 
-You can find intermediate output files in the ```runs/``` directory, logs in the ```logs/``` directory and the intermediate and final reports in the ```reports/``` directory.
+You can find intermediate output files in run-specific temporary workspaces under ```runs/``` while the pipeline is executing, and logs in the ```logs/``` directory. Successful runs clean up their temporary ```runs/``` workspace automatically.
+
+In single-sample mode, reports are written to per-sample folders under the configured ```reports/``` directory and exported references are written to per-sample folders under the configured ```references/``` directory. When ```--outdir``` is used, reports are written to ```<outdir>/<sample>/reports/``` and exported references to ```<outdir>/<sample>/references/```.
+
+In batch mode, reports and exported references are grouped under a batch directory. With the default paths, reports are written under ```<reports>/<batch_name>/<sample>/``` and exported references under ```<references>/<batch_name>/<sample>/```. When ```--outdir``` is used, reports are written to ```<outdir>/<batch_name>/<sample>/reports/``` and exported references to ```<outdir>/<batch_name>/<sample>/references/```. The batch summary, batch index, and batch ZIP are written at the batch root, and the HTML index and ZIP preserve the nested sample folder structure.
 
 Sample usage (one sample per file, default config file, single sample mode, no forces, no offs, consensus mode):
 
 ```
 python3 main.py -f  SAMPLE_FASTA.fasta -m consensus
+```
+
+Sample usage (direct run with a custom output stem and collision checking):
+
+```bash
+python3 main.py -f SAMPLE_FASTA.fasta -m consensus -ss on -o SAMPLE_ALIAS
+```
+
+Sample usage (demultiplex a multifasta into a temporary batch using a mandatory regex that captures only the sample identifier):
+
+```bash
+python3 main.py -f MY_MULTIFASTA.fasta -m consensus -bf --bf-regex '(?P<sample>EPI_ISL_\d+)'
+```
+
+Example using the first capture group instead of a named group:
+
+```bash
+python3 main.py -f MY_MULTIFASTA.fasta -m consensus -bf --bf-regex '(A/[^_ ]+/[A-Za-z0-9-]+/\d{4})'
+```
+
+Example forcing a non-demultipliable multifasta to run as multi-sample mode:
+
+```bash
+python3 main.py -f MY_MULTIFASTA.fasta -m consensus -bf --bf-regex '(?P<sample>[^|]+)' --force-bf
 ```
 
 ## Pipeline steps
@@ -97,3 +135,5 @@ These files will need to be placed in the
 python3 update.py -c CONFIG_FILE -ff UPDATE_FASTA -mf UPDATE_CSV
 ```
 Depending on the size of the sequence database the update can take a long while so it's recommended you use a screen if working on a shared server.
+
+Update validation reports are written to the dedicated path configured as ```update_reports``` under ```[Paths]``` in ```config.ini```, so update runs stay isolated from normal pipeline report outputs. Older configs that do not define ```update_reports``` fall back to ```update/reports``` automatically.

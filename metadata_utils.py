@@ -344,8 +344,11 @@ class ClusterMetadata(MetadataTable):
         -------
         None
         """
+        collection_date_index = self.headers.get('COLLECTION_DATE')
         for key in self.data:
              for i in range(1,len(self.data[key])):
+                if collection_date_index is not None and i == collection_date_index - 1:
+                    continue
                 self.data[key][i]=ast.literal_eval(self.data[key][i])
     
     def update_metadata(self) -> None:
@@ -780,8 +783,11 @@ class ClusterReportTable(MetadataTable):
         -------
         None
         """
+        collection_date_index = self.headers.get('COLLECTION_DATE')
         for key in self.data:
              for i in range(3,len(self.data[key])):
+                if collection_date_index is not None and i == collection_date_index - 1:
+                    continue
                 self.data[key][i]=ast.literal_eval(self.data[key][i])
 
     def validate_metadata(self) -> None:

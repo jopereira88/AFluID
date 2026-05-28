@@ -2,14 +2,192 @@ from collections import defaultdict
 import ast
 from unittest import result
 from typing import Any, Callable, Iterable, Optional
-from structures import geo_dict, taxa_dict, muts_interest, seg_lens, muts_loci_meaning
+from structures import (
+    geo_syns,
+    taxa_syns,
+    muts_interest,
+    seg_lens,
+    muts_loci_meaning,
+    iav_segments,
+    segment_to_number_iav,
+)
 import pandas as pd
 import os
 import csv
 import zipfile
+from metadata_tree_utils import load_reference_dicts
+from flu_utils import parse_clstr
 from html import escape
 import re
 
+
+def _norm_key(value: Any) -> Optional[str]:
+    """
+    Normalize a metadata/reference key for case-insensitive lookup.
+
+    Uses lower() consistently. This function is used both for raw metadata
+    values and for canonical reference dictionary keys.
+
+    Returns
+    -------
+    str or None
+        Lowercase stripped string, or None for missing/empty values.
+    """
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    text = str(value).strip()
+
+    if not text:
+        return None
+
+    return text.lower()
+
+
+def _build_lower_lookup(values: Iterable[str]) -> dict[str, str]:
+    """
+    Build a lowercase lookup index from canonical reference names.
+
+    Example
+    -------
+    {"homo sapiens": "Homo sapiens"}
+
+    If duplicate lowercase keys occur, the first one is kept.
+    """
+    lookup = {}
+
+    for value in values:
+        key = _norm_key(value)
+
+        if key is None:
+            continue
+
+        if key not in lookup:
+            lookup[key] = str(value).strip()
+
+    return lookup
+
+
+def _resolve_with_synonyms(
+    value: Any,
+    synonyms: Optional[dict[str, Optional[str]]],
+) -> Optional[str]:
+    """
+    Resolve a raw value through a synonym dictionary using lowercase matching.
+
+    Both the raw input and synonym keys are compared as lowercase strings.
+
+    Behaviour
+    ---------
+    - None / NaN / empty -> None
+    - if lower(value) matches lower(synonym_key), return synonym value
+    - synonym value may be None; downstream code must treat None as Unknown
+    - if no synonym matches, return stripped original value
+
+    Notes
+    -----
+    This function does not require synonym dictionaries to already have
+    lowercase keys. It normalizes both sides.
+    """
+    value_key = _norm_key(value)
+
+    if value_key is None:
+        return None
+
+    raw_value = str(value).strip()
+
+    if not synonyms:
+        return raw_value
+
+    for syn_key, canonical_value in synonyms.items():
+        syn_key_norm = _norm_key(syn_key)
+
+        if syn_key_norm is None:
+            continue
+
+        if value_key == syn_key_norm:
+            if canonical_value is None:
+                return None
+
+            canonical_text = str(canonical_value).strip()
+
+            if not canonical_text:
+                return None
+
+            return canonical_text
+
+    return raw_value
+
+
+def _resolve_against_reference(
+    value: Any,
+    reference_keys: Iterable[str],
+    synonyms: Optional[dict[str, Optional[str]]] = None,
+) -> Optional[str]:
+    """
+    Resolve a value through synonyms and then against canonical reference keys.
+
+    Resolution order
+    ----------------
+    1. raw value -> synonyms
+    2. None from synonyms -> None
+    3. lowercase comparison against canonical reference keys
+    4. if found, return canonical reference spelling
+    5. if not found, return resolved value as-is
+
+    This keeps the canonical spelling from geo_dict/taxa_dict whenever possible.
+    """
+    resolved = _resolve_with_synonyms(value, synonyms)
+
+    if resolved is None:
+        return None
+
+    reference_lookup = _build_lower_lookup(reference_keys)
+    resolved_key = _norm_key(resolved)
+
+    if resolved_key is None:
+        return None
+
+    if resolved_key in reference_lookup:
+        return reference_lookup[resolved_key]
+
+    return str(resolved).strip()
+
+
+def _unknown_if_none(value: Optional[str]) -> str:
+    """
+    Convert None/empty values to the report-level Unknown label.
+    """
+    if value is None:
+        return "Unknown"
+
+    text = str(value).strip()
+
+    if not text:
+        return "Unknown"
+
+    return text
+
+
+def _normalize_collection_date(value: Any) -> str:
+    """Return a stable display string for collection dates."""
+    try:
+        if pd.isna(value):
+            return "Unknown"
+    except Exception:
+        pass
+
+    text = str(value).strip()
+    if not text or text.lower() == 'nan':
+        return "Unknown"
+
+    return text
 
 def _empty_card(message: str) -> str:
     """Return a consistent empty-state card for report sections."""
@@ -41,65 +219,341 @@ def _safe_read_table(path: str, required_cols: Optional[Iterable[str]] = None) -
     return df, None
 
 
-def rollup_geo(location: Any, geo_dict: dict[str, tuple[str, str]], mode: str = 'region') -> str:
+def _safe_read_metadata_csv(path: str, required_cols: Optional[Iterable[str]] = None) -> tuple[Optional[pd.DataFrame], Optional[str]]:
+    """Read the semicolon-delimited metadata CSV defensively."""
+    if not path or not os.path.exists(path):
+        return None, f"Required metadata input is missing: {path}"
+
+    try:
+        df = pd.read_csv(path, sep=';', index_col=False, low_memory=False)
+    except Exception as exc:
+        return None, f"Could not read metadata input {path}: {exc}"
+
+    if df is None or df.empty:
+        return None, f"Metadata input is empty: {path}"
+
+    df.columns = [str(col).strip().upper() for col in df.columns]
+
+    if required_cols:
+        missing = [col for col in required_cols if col not in df.columns]
+        if missing:
+            return None, f"Metadata input is missing required columns ({', '.join(missing)}): {path}"
+
+    return df, None
+
+
+def _coerce_metadata_counter(cell: Any) -> dict[str, float]:
+    """Parse a metadata distribution cell into a numeric dictionary."""
+    if isinstance(cell, dict):
+        source = dict(cell)
+    elif pd.isna(cell):
+        return {}
+    else:
+        text = str(cell).strip().replace('%', '')
+        if not text:
+            return {}
+        try:
+            source = ast.literal_eval(text)
+        except Exception:
+            return {}
+
+    if not isinstance(source, dict):
+        return {}
+
+    cleaned = {}
+    for key, value in source.items():
+        try:
+            cleaned[str(key).strip()] = float(value)
+        except Exception:
+            continue
+
+    return cleaned
+
+
+def _normalize_distribution_for_export(counter: dict[str, float], ndigits: int = 2) -> dict[str, float]:
+    """Round a distribution deterministically while forcing the total to sum to 1.0."""
+    if not counter:
+        return {}
+
+    cleaned = {}
+    total = 0.0
+    for key, value in counter.items():
+        key_text = str(key).strip()
+        try:
+            value_num = float(value)
+        except Exception:
+            continue
+        if not key_text or value_num <= 0:
+            continue
+        cleaned[key_text] = value_num
+        total += value_num
+
+    if not cleaned or total <= 0:
+        return {}
+
+    scale = 10 ** int(ndigits)
+    ordered = sorted(cleaned.items(), key=lambda item: (-float(item[1]), str(item[0])))
+    normalized = [(key, value / total) for key, value in ordered]
+    base_units = []
+    used_units = 0
+
+    for key, value in normalized:
+        exact_units = value * scale
+        floor_units = int(exact_units)
+        remainder = exact_units - floor_units
+        base_units.append([key, floor_units, remainder])
+        used_units += floor_units
+
+    remaining_units = scale - used_units
+    if remaining_units > 0:
+        for key, floor_units, remainder in sorted(base_units, key=lambda item: (-item[2], str(item[0]))):
+            if remaining_units <= 0:
+                break
+            for entry in base_units:
+                if entry[0] == key:
+                    entry[1] += 1
+                    remaining_units -= 1
+                    break
+
+    rounded = {}
+    for key, units, _ in base_units:
+        rounded[key] = round(units / scale, ndigits)
+
+    return rounded
+
+
+def _serialize_distribution(counter: dict[str, float], ndigits: int = 2) -> str:
+    """Serialize a distribution as a stable dict-style string."""
+    normalized = _normalize_distribution_for_export(counter, ndigits=ndigits)
+    if not normalized:
+        return 'Unknown'
+
+    parts = []
+    for key, value in sorted(normalized.items(), key=lambda item: (-float(item[1]), str(item[0]))):
+        parts.append(f"{repr(str(key))}: {value:.{ndigits}f}")
+    return '{' + ', '.join(parts) + '}'
+
+
+def _static_rollup_distribution(cell: Any, mapper: Callable[[str], str]) -> str:
+    """Convert a metadata distribution into a serialized rolled-up distribution."""
+    counter = _coerce_metadata_counter(cell)
+    if not counter:
+        return 'Unknown'
+
+    rolled = _rollup_counts(counter, mapper, drop_unknown=True)
+    if not rolled:
+        return 'Unknown'
+
+    return _serialize_distribution(rolled, ndigits=2)
+
+
+def _collect_report_clusters(id_report_fps: Iterable[str]) -> list[str]:
+    """Return the unique real cluster labels present in one or more ID reports."""
+    seen = set()
+    ordered = []
+
+    for id_report_fp in id_report_fps:
+        df, error = _safe_read_table(id_report_fp, required_cols=['CLUSTER'])
+        if error or df is None:
+            continue
+
+        for value in df['CLUSTER'].tolist():
+            cluster = str(value).strip()
+            if not cluster.startswith('>Cluster '):
+                continue
+            if cluster in seen:
+                continue
+            seen.add(cluster)
+            ordered.append(cluster)
+
+    return ordered
+
+
+def export_id_report_rollup(
+    id_report_fp: str,
+    output_fp: str,
+    geo_dict: dict[str, tuple[str, str]],
+    taxa_dict: dict[str, list[str]],
+) -> None:
+    """Write a per-sample ID report TSV with static taxonomy/geography roll-ups."""
+    df, error = _safe_read_table(
+        id_report_fp,
+        required_cols=['SAMPLE_NAME', 'HOST', 'COUNTRY', 'ASSIGNED_BY'],
+    )
+    if error or df is None:
+        raise ValueError(error or f'Could not load ID report: {id_report_fp}')
+
+    for col in ['HOST', 'COUNTRY', 'ASSIGNED_BY']:
+        if col not in df.columns:
+            df[col] = 'Unknown'
+
+    host_family = []
+    host_class = []
+    country_region = []
+    country_continent = []
+
+    for row in df.itertuples(index=False):
+        assigned_by = str(getattr(row, 'ASSIGNED_BY', '')).strip()
+        host_value = getattr(row, 'HOST', 'Unknown')
+        country_value = getattr(row, 'COUNTRY', 'Unknown')
+
+        if assigned_by == 'L-BLAST':
+            host_family.append(rollup_taxa(host_value, taxa_dict, level='Family'))
+            host_class.append(rollup_taxa(host_value, taxa_dict, level='Class'))
+            country_region.append(rollup_geo(country_value, geo_dict, mode='region'))
+            country_continent.append(rollup_geo(country_value, geo_dict, mode='continent'))
+        else:
+            host_family.append(
+                _static_rollup_distribution(host_value, lambda term: rollup_taxa(term, taxa_dict, level='Family'))
+            )
+            host_class.append(
+                _static_rollup_distribution(host_value, lambda term: rollup_taxa(term, taxa_dict, level='Class'))
+            )
+            country_region.append(
+                _static_rollup_distribution(country_value, lambda loc: rollup_geo(loc, geo_dict, mode='region'))
+            )
+            country_continent.append(
+                _static_rollup_distribution(country_value, lambda loc: rollup_geo(loc, geo_dict, mode='continent'))
+            )
+
+    df['HOST_FAMILY'] = host_family
+    df['HOST_CLASS'] = host_class
+    df['COUNTRY_REGION'] = country_region
+    df['COUNTRY_CONTINENT'] = country_continent
+    df.to_csv(output_fp, sep='\t', index=False)
+
+
+def export_cluster_composition(
+    id_report_fps: Iterable[str],
+    metadata_csv_fp: str,
+    cluster_clstr_fp: str,
+    output_fp: str,
+) -> None:
+    """Write a cluster composition TSV for the clusters used in an analysis."""
+    clusters = _collect_report_clusters(id_report_fps)
+
+    metadata_df, error = _safe_read_metadata_csv(
+        metadata_csv_fp,
+        required_cols=['ACCESSION', 'SEGMENT', 'GENOTYPE', 'HOST', 'COUNTRY'],
+    )
+    if error or metadata_df is None:
+        raise ValueError(error or f'Could not load metadata CSV: {metadata_csv_fp}')
+
+    if not os.path.exists(cluster_clstr_fp):
+        raise ValueError(f'Required cluster membership input is missing: {cluster_clstr_fp}')
+
+    collection_date_col = 'COLLECTION_DATE' if 'COLLECTION_DATE' in metadata_df.columns else None
+    metadata_df['ACCESSION'] = metadata_df['ACCESSION'].astype(str).str.strip()
+    metadata_df = metadata_df.dropna(subset=['ACCESSION'])
+    metadata_df = metadata_df[metadata_df['ACCESSION'] != '']
+    metadata_df = metadata_df.drop_duplicates(subset=['ACCESSION'], keep='first')
+    metadata_df = metadata_df.set_index('ACCESSION', drop=False)
+
+    cluster_members = parse_clstr(cluster_clstr_fp, access_only=True)
+    rows = []
+    seen = set()
+
+    for cluster in clusters:
+        members = cluster_members.get(cluster, [])
+        for accession in members:
+            accession_text = str(accession).strip()
+            key = (cluster, accession_text)
+            if not accession_text or key in seen:
+                continue
+            seen.add(key)
+
+            if accession_text not in metadata_df.index:
+                continue
+
+            meta_row = metadata_df.loc[accession_text]
+            rows.append({
+                'CLUSTER': cluster,
+                'ACCESSION': accession_text,
+                'SEGMENT': str(meta_row.get('SEGMENT', '')).strip(),
+                'GENOTYPE': str(meta_row.get('GENOTYPE', '')).strip(),
+                'HOST': str(meta_row.get('HOST', '')).strip(),
+                'COUNTRY': str(meta_row.get('COUNTRY', '')).strip(),
+                'COLLECTION_DATE': _normalize_collection_date(meta_row.get(collection_date_col, 'Unknown')) if collection_date_col else 'Unknown',
+            })
+
+    out_df = pd.DataFrame(
+        rows,
+        columns=['CLUSTER', 'ACCESSION', 'SEGMENT', 'GENOTYPE', 'HOST', 'COUNTRY', 'COLLECTION_DATE'],
+    )
+    out_df.to_csv(output_fp, sep='\t', index=False)
+
+def rollup_geo(
+    location: Any,
+    geo_dict: dict[str, tuple[str, str]],
+    mode: str = 'region'
+) -> str:
     """
     Roll up a country name to a broader geographic label.
 
-    Parameters
-    ----------
-    location : Any
-        Country or location value to map.
-    geo_dict : dict
-        Mapping from country names to tuples containing region and continent.
-    mode : {"country", "region", "continent"}, default "region"
-        Geographic level to return.
+    Applies geo_syns before consulting the canonical geo_dict.
 
-    Returns
-    -------
-    str
-        Geographic label at the requested level, or ``"Unknown"`` when no
-        mapping is available.
+    Unknown/missing values mapped to None by geo_syns are returned as
+    "Unknown".
     """
-    if pd.isna(location):
-        return 'Unknown'
-
-    location = str(location).strip()
     mode = str(mode).strip().lower()
 
-    if mode == 'country':
-        return location if location else 'Unknown'
+    canonical_location = _resolve_against_reference(
+        value=location,
+        reference_keys=geo_dict.keys(),
+        synonyms=geo_syns,
+    )
 
-    if location in geo_dict:
-        if mode == 'region':
-            return geo_dict[location][0]
-        elif mode == 'continent':
-            return geo_dict[location][1]
+    if canonical_location is None:
+        return "Unknown"
 
-    return 'Unknown'
+    if mode == "country":
+        if canonical_location in geo_dict:
+            return canonical_location
+        return "Unknown"
+
+    if canonical_location in geo_dict:
+        if mode == "region":
+            return geo_dict[canonical_location][0]
+        if mode == "continent":
+            return geo_dict[canonical_location][1]
+
+    return "Unknown"
 
 def search_tax_level(term: Any, taxa_dict: dict[str, list[str]]) -> str | tuple[str, str]:
     """
     Find the taxonomy level represented by a host term.
 
-    Parameters
-    ----------
-    term : Any
-        Host or taxonomy label to resolve.
-    taxa_dict : dict
-        Mapping of canonical host labels to taxonomy paths.
+    Applies taxa_syns before consulting the canonical taxa_dict.
 
     Returns
     -------
     tuple[str, str] or str
-        ``(level_name, canonical_key)`` when a match is found, otherwise
-        ``"Unknown"``.
+        (level_name, canonical_key) when found, otherwise "Unknown".
     """
-    if pd.isna(term):
-        return 'Unknown'
+    canonical_term = _resolve_against_reference(
+        value=term,
+        reference_keys=taxa_dict.keys(),
+        synonyms=taxa_syns,
+    )
 
-    term = str(term).strip()
-    if not term:
-        return 'Unknown'
+    if canonical_term is None:
+        return "Unknown"
+
+    canonical_term = str(canonical_term).strip()
+
+    if not canonical_term:
+        return "Unknown"
+
+    if "sp." in canonical_term or "spp." in canonical_term:
+        canonical_term = (
+            canonical_term
+            .replace("sp.", "")
+            .replace("spp.", "")
+            .strip()
+        )
+
+    if not canonical_term:
+        return "Unknown"
 
     tax_level = {
         0: 'Species',
@@ -111,31 +565,45 @@ def search_tax_level(term: Any, taxa_dict: dict[str, list[str]]) -> str | tuple[
         6: 'Class'
     }
 
-    for key in taxa_dict:
-        for level in range(len(taxa_dict[key])):
-            if term == taxa_dict[key][level]:
+    canonical_key_lookup = _build_lower_lookup(taxa_dict.keys())
+    canonical_term_key = _norm_key(canonical_term)
+
+    if canonical_term_key is None:
+        return "Unknown"
+
+    # Fast path: term matches a canonical taxa_dict key, ignoring case.
+    if canonical_term_key in canonical_key_lookup:
+        canonical_key = canonical_key_lookup[canonical_term_key]
+        lineage = taxa_dict.get(canonical_key, [])
+
+        for level, value in enumerate(lineage):
+            if value == "X":
+                continue
+
+            value_key = _norm_key(value)
+
+            if value_key == canonical_term_key:
+                return tax_level[level], canonical_key
+
+    # Fallback: term may match a lineage value rather than a taxa_dict key.
+    for key, lineage in taxa_dict.items():
+        for level, value in enumerate(lineage):
+            if value == "X":
+                continue
+
+            if _norm_key(value) == canonical_term_key:
                 return tax_level[level], key
 
-    return 'Unknown'
+    return "Unknown"
 
 def rollup_taxa(term: Any, taxa_dict: dict[str, list[str]], level: str = 'Genus') -> str:
     """
     Roll up a host term to a requested taxonomy level.
 
-    Parameters
-    ----------
-    term : Any
-        Host or taxonomy label to resolve.
-    taxa_dict : dict
-        Mapping of canonical host labels to taxonomy paths.
-    level : str, default "Genus"
-        Target taxonomy level.
+    Applies taxa_syns before consulting the canonical taxa_dict.
 
-    Returns
-    -------
-    str
-        Rolled-up taxonomy label, or ``"Unknown"`` when it cannot be
-        resolved.
+    Unknown/missing values mapped to None by taxa_syns are returned as
+    "Unknown".
     """
     level_tax = {
         'SPECIES': 0,
@@ -147,39 +615,34 @@ def rollup_taxa(term: Any, taxa_dict: dict[str, list[str]], level: str = 'Genus'
         'CLASS': 6
     }
 
-    if pd.isna(term):
-        return 'Unknown'
-
-    term = str(term).strip()
-    if not term:
-        return 'Unknown'
-
-    if 'sp.' in term or 'spp.' in term:
-        term = term.replace('sp.', '').replace('spp.', '').strip()
-
     result = search_tax_level(term, taxa_dict)
-    if result == 'Unknown':
-        return 'Unknown'
+
+    if result == "Unknown":
+        return "Unknown"
 
     t_lev, key = result
 
     if key not in taxa_dict:
-        return 'Unknown'
+        return "Unknown"
 
     target_level = str(level).upper()
     current_level = str(t_lev).upper()
 
     if target_level not in level_tax or current_level not in level_tax:
-        return 'Unknown'
+        return "Unknown"
 
-    if current_level == target_level:
-        return taxa_dict[key][level_tax[target_level]]
-    elif level_tax[current_level] < level_tax[target_level]:
-        return taxa_dict[key][level_tax[target_level]]
-    elif level_tax[current_level] > level_tax[target_level]:
-        return taxa_dict[key][level_tax[current_level]]
+    target_idx = level_tax[target_level]
+    current_idx = level_tax[current_level]
+
+    if current_idx <= target_idx:
+        value = taxa_dict[key][target_idx]
     else:
-        return 'Unknown'
+        value = taxa_dict[key][current_idx]
+
+    if value == "X" or not str(value).strip():
+        return "Unknown"
+
+    return str(value).strip()
     
 def _rollup_counts(counter: Optional[dict[str, int | float]], mapper: Callable[[str], str], drop_unknown: bool = False) -> dict[str, int | float]:
     """
@@ -386,8 +849,12 @@ def clean_country(country_cell: Any, geo_dict: dict[str, tuple[str, str]], mode:
         except Exception:
             continue
 
-    if str(mode).strip().lower() != 'country':
-        cleaned = rollup_counts_geo(cleaned, geo_dict, mode=mode, drop_unknown=drop_unknown)
+    cleaned = rollup_counts_geo(
+            cleaned,
+            geo_dict,
+            mode=mode,
+            drop_unknown=drop_unknown,
+            )
 
     if sum(cleaned.values()) > 1.0:
         for key in cleaned:
@@ -523,6 +990,127 @@ def _join_rel_path(*parts: str) -> str:
     return os.path.join(*clean_parts).replace(os.sep, "/")
 
 
+def _html_link(href: str, label: str) -> str:
+    """Render an anchor that always opens in a new tab."""
+    return (
+        f'<a href="{escape(str(href).strip())}" target="_blank" '
+        f'rel="noopener noreferrer">{escape(str(label).strip())}</a>'
+    )
+
+
+def _representative_link(accession: Any) -> str:
+    """Render a representative accession as an NCBI Nuccore link."""
+    accession_text = str(accession).strip()
+    if not accession_text or accession_text == 'Not Available':
+        return 'Not Available'
+    return _html_link(
+        f'https://www.ncbi.nlm.nih.gov/nuccore/{accession_text}',
+        accession_text,
+    )
+
+
+def _segment_sort_key(segment_name: Any) -> tuple[int, str]:
+    """Return a stable sort key for canonical IAV segment ordering."""
+    segment_text = str(segment_name).strip()
+    return (segment_to_number_iav.get(segment_text, 999), segment_text)
+
+
+def _display_mutation_label(segment: str, mutation: str, mut_lookup: dict[str, tuple[str, str]]) -> str:
+    """Return the locus-prefixed mutation label used in the mutations tab."""
+    mutation_text = str(mutation).strip()
+    if not mutation_text:
+        return ''
+    if mutation_text in mut_lookup:
+        return mut_lookup[mutation_text][0]
+    return f'{segment}:{mutation_text}'
+
+
+def _tool_version_placeholder_map() -> dict[str, str]:
+    """Return the supported per-tool HTML placeholder tags."""
+    return {
+        '<!--TOOL_VERSION_BLASTN-->': 'blastn',
+        '<!--TOOL_VERSION_CD_HIT_EST_2D-->': 'cd-hit-est-2d',
+        '<!--TOOL_VERSION_FLUMUT-->': 'flumut',
+        '<!--TOOL_VERSION_FLUMUTDB-->': 'FluMutDB',
+        '<!--TOOL_VERSION_GENIN2-->': 'genin2',
+        '<!--TOOL_VERSION_NEXTCLADE-->': 'nextclade',
+    }
+
+
+def _tool_version_text(value: Any) -> str:
+    """Normalize a tool-version value into display text."""
+    if isinstance(value, dict):
+        version = str(value.get('version', '')).strip()
+        build = str(value.get('build', '')).strip()
+        detail = ' '.join(part for part in (version, build) if part)
+    else:
+        detail = str(value).strip()
+    return detail or 'Unknown'
+
+
+def _apply_named_tool_version_placeholders(
+    html_text: str,
+    tool_versions: Optional[dict[str, Any]] = None,
+) -> str:
+    """Replace all supported per-tool placeholders in the supplied HTML."""
+    if not tool_versions:
+        tool_versions = {}
+
+    for placeholder_tag, tool_key in _tool_version_placeholder_map().items():
+        replacement = escape(_tool_version_text(tool_versions.get(tool_key, '')))
+        html_text = html_text.replace(placeholder_tag, replacement)
+
+    return html_text
+
+
+def apply_tool_version_placeholder(
+    html_text: str,
+    tool_versions: Optional[dict[str, Any]] = None,
+    placeholder_tag: Optional[str] = None,
+) -> str:
+    """Replace a caller-provided placeholder tag with tool version text.
+
+    This helper supports both a caller-provided aggregate placeholder and the
+    built-in per-tool placeholders returned by ``_tool_version_placeholder_map()``.
+    To use individual tool tags in a template, add markers such as
+    ``<!--TOOL_VERSION_BLASTN-->`` or ``<!--TOOL_VERSION_NEXTCLADE-->``.
+
+    Parameters
+    ----------
+    html_text : str
+        HTML content to transform.
+    tool_versions : dict, optional
+        Mapping such as ``flags['Tool Versions']``. Values may be strings or
+        dictionaries containing fields like ``version`` and ``build``.
+    placeholder_tag : str, optional
+        Exact aggregate marker text to replace with the full multi-line tool
+        version block. When omitted, only the per-tool placeholders are
+        processed.
+
+    Returns
+    -------
+    str
+        Updated HTML when the placeholder is present, otherwise the original
+        HTML.
+    """
+    html_text = _apply_named_tool_version_placeholders(html_text, tool_versions)
+
+    if not placeholder_tag or placeholder_tag not in html_text:
+        return html_text
+
+    if not tool_versions:
+        return html_text.replace(placeholder_tag, '')
+
+    lines = []
+    for tool_name in sorted(tool_versions):
+        value = tool_versions[tool_name]
+        detail = _tool_version_text(value)
+        lines.append(f'{escape(str(tool_name))}: {escape(detail)}')
+
+    replacement = '<br>'.join(lines)
+    return html_text.replace(placeholder_tag, replacement)
+
+
 def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: Optional[list[dict[str, str]]] = None, output_name: str = "batch_index.html") -> str:
     """
     Create an HTML landing page for batch outputs.
@@ -587,8 +1175,6 @@ def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: 
         <th>File tag</th>
         <th>Status</th>
         <th>Final report</th>
-        <th>ID report</th>
-        <th>Flags</th>
         <th>Extras</th>
         <th>Error</th>
       </tr>
@@ -618,28 +1204,23 @@ def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: 
         flags_rel = _join_rel_path(reports_dir_rel, flags_json)
 
         if is_ok and os.path.exists(os.path.join(reports_dir_abs, final_report)):
-            final_report_link = f'<a href="{escape(final_report_rel)}">{escape(final_report)}</a>'
+            final_report_link = _html_link(final_report_rel, final_report)
         else:
             final_report_link = '<span class="missing">missing</span>'
 
-        if is_ok and os.path.exists(os.path.join(reports_dir_abs, id_report)):
-            id_report_link = f'<a href="{escape(id_report_rel)}">{escape(id_report)}</a>'
-        else:
-            id_report_link = '<span class="missing">missing</span>'
-
-        if is_ok and os.path.exists(os.path.join(reports_dir_abs, flags_json)):
-            flags_link = f'<a href="{escape(flags_rel)}">{escape(flags_json)}</a>'
-        else:
-            flags_link = '<span class="missing">missing</span>'
-
         extras = []
+        if is_ok and os.path.exists(os.path.join(reports_dir_abs, id_report)):
+            extras.append(_html_link(id_report_rel, id_report))
+        if is_ok and os.path.exists(os.path.join(reports_dir_abs, flags_json)):
+            extras.append(_html_link(flags_rel, flags_json))
+
         if file_tag and os.path.isdir(reports_dir_abs):
             for fname in sorted(os.listdir(reports_dir_abs)):
                 if fname.startswith(f"{file_tag}_") and fname not in {final_report, id_report, flags_json}:
                     full = os.path.join(reports_dir_abs, fname)
                     if os.path.isfile(full):
                         fname_rel = _join_rel_path(reports_dir_rel, fname)
-                        extras.append(f'<a href="{escape(fname_rel)}">{escape(fname)}</a>')
+                        extras.append(_html_link(fname_rel, fname))
 
         extras_html = "<br>".join(extras) if extras else '<span class="missing">none</span>'
         status_html = escape(status) if status != "failed" else f'<span class="failed">{escape(status)}</span>'
@@ -651,8 +1232,6 @@ def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: 
           <td><code>{escape(file_tag)}</code></td>
           <td>{status_html}</td>
           <td>{final_report_link}</td>
-          <td>{id_report_link}</td>
-          <td>{flags_link}</td>
           <td>{extras_html}</td>
           <td>{error_html}</td>
         </tr>
@@ -724,7 +1303,7 @@ def create_batch_zip(reports_p: str, ok_rows: list[dict[str, str]], zip_name: st
     return zip_fp
 
 
-def maybe_create_batch_artifacts(reports_p: str, batch_summary_fp: str) -> bool:
+def maybe_create_batch_artifacts(reports_p: str, batch_summary_fp: str, extra_files: Optional[list[str]] = None) -> bool:
     """
     Create batch index + zip only if the provided batch summary exists, is valid,
     and contains at least one successful sample.
@@ -743,6 +1322,9 @@ def maybe_create_batch_artifacts(reports_p: str, batch_summary_fp: str) -> bool:
     """
     if not batch_summary_fp:
         return False
+
+    if extra_files is None:
+        extra_files = []
 
     if not os.path.exists(batch_summary_fp):
         return False
@@ -790,7 +1372,7 @@ def maybe_create_batch_artifacts(reports_p: str, batch_summary_fp: str) -> bool:
         reports_p=reports_p,
         ok_rows=ok_rows,
         zip_name=zip_name,
-        extra_files=[os.path.basename(batch_summary_fp), index_name]
+        extra_files=[os.path.basename(batch_summary_fp), index_name, *extra_files]
     )
 
     return True
@@ -842,7 +1424,13 @@ def create_sample_card(flags: dict) -> str:
 </div>"""
     return card
 
-def create_sample_table(df_segments: str, flags: dict, seg_lens: dict, mappings: dict[str, str]) -> str:
+def create_sample_table(
+    df_segments: str,
+    flags: dict,
+    seg_lens: dict,
+    mappings: dict[str, str],
+    muts_loci_meaning: dict[str, tuple[str, str]],
+) -> str:
     """
     Create the per-segment summary table for the Sample tab.
 
@@ -875,7 +1463,7 @@ def create_sample_table(df_segments: str, flags: dict, seg_lens: dict, mappings:
     }
 
     seq_names = {}
-    for segment in len_thres.keys():
+    for segment in iav_segments:
         for name in flags['Sample'].get(segment, []):
             if name in mappings:
                 seq_names[mappings[name]] = segment
@@ -898,16 +1486,17 @@ def create_sample_table(df_segments: str, flags: dict, seg_lens: dict, mappings:
     <tbody>
     '''
 
-    for row in range(len(df)):
-        seq = df.loc[row, 'SAMPLE_NAME']
-        segment = seq_names[seq] if seq in seq_names else "Not Available"
-
+    for segment in iav_segments:
         if segment in len_thres:
             length = flags['Sample'].get(f'{segment}_len', 0)
             ref_list = flags['Sample'].get(f'{segment}_ref', [])
-            reference = ref_list[0] if ref_list else "Not Available"
+            reference = _representative_link(ref_list[0] if ref_list else "Not Available")
             muts_list = flags['Sample'].get(f'{segment}_muts', [])
-            mutations = ', '.join(muts_list) if muts_list else "None"
+            mutations = ', '.join(
+                _display_mutation_label(segment, mut, muts_loci_meaning)
+                for mut in muts_list
+                if str(mut).strip()
+            ) if muts_list else "None"
 
             min_len, max_len = len_thres[segment]
             if length < min_len:
@@ -945,7 +1534,14 @@ def create_sample_table(df_segments: str, flags: dict, seg_lens: dict, mappings:
     return table
 
 
-def create_segment_background_table(df_segments: str, flags: dict, seg_lens: dict, mappings: dict[str, str]) -> str:
+def create_segment_background_table(
+    df_segments: str,
+    flags: dict,
+    seg_lens: dict,
+    mappings: dict[str, str],
+    geo_dict: dict[str, tuple[str, str]],
+    taxa_dict: dict[str, list[str]],
+) -> str:
     """
     Create the Segment Background table for single-sample reports.
 
@@ -984,7 +1580,7 @@ def create_segment_background_table(df_segments: str, flags: dict, seg_lens: dic
     }
 
     seq_names = {}
-    for segment in len_thres.keys():
+    for segment in iav_segments:
         for name in flags['Sample'].get(segment, []):
             if name in mappings:
                 seq_names[mappings[name]] = segment
@@ -1000,6 +1596,7 @@ def create_segment_background_table(df_segments: str, flags: dict, seg_lens: dic
         'HOST': 'Unknown',
         'GENOTYPE': 'Unknown',
         'COUNTRY': 'Unknown',
+        'COLLECTION_DATE': 'Unknown',
     }.items():
         if col not in df.columns:
             df[col] = default
@@ -1017,6 +1614,7 @@ def create_segment_background_table(df_segments: str, flags: dict, seg_lens: dic
         <th>%ID</th>
         <th>Cluster</th>
         <th>Genotype</th>
+        <th>Collection_date</th>
         <th>Assigned_By</th>
         <th>Note</th>
       </tr>
@@ -1041,14 +1639,20 @@ def create_segment_background_table(df_segments: str, flags: dict, seg_lens: dic
         lambda x: clean_country(x, geo_dict, mode='country', drop_unknown=True)
     )
 
+    df['SEGMENT_NAME'] = df['SAMPLE_NAME'].apply(lambda value: seq_names.get(value, 'Not Available'))
+    df = df.sort_values(
+        by='SEGMENT_NAME',
+        key=lambda series: series.map(lambda value: _segment_sort_key(value)),
+        kind='stable',
+    ).reset_index(drop=True)
+
     for row in range(len(df)):
-        seq = df.loc[row, 'SAMPLE_NAME']
-        segment = seq_names[seq] if seq in seq_names else "Not Available"
+        segment = df.loc[row, 'SEGMENT_NAME']
 
         if segment in len_thres:
             length = flags['Sample'].get(f'{segment}_len', 0)
             ref_list = flags['Sample'].get(f'{segment}_ref', [])
-            reference = ref_list[0] if ref_list else "Not Available"
+            reference = _representative_link(ref_list[0] if ref_list else "Not Available")
 
             min_len, max_len = len_thres[segment]
             if length < min_len:
@@ -1070,6 +1674,7 @@ def create_segment_background_table(df_segments: str, flags: dict, seg_lens: dic
         assigned_by = df.loc[row, 'ASSIGNED_BY']
         perc_id = df.loc[row, '%ID']
         cluster = df.loc[row, 'CLUSTER']
+        collection_date = _normalize_collection_date(df.loc[row, 'COLLECTION_DATE'])
 
         if assigned_by != 'L-BLAST':
             host_species = df.loc[row, 'HOST_CLEAN']
@@ -1118,6 +1723,7 @@ def create_segment_background_table(df_segments: str, flags: dict, seg_lens: dic
           <td>{perc_id}</td>
           <td>{cluster}</td>
           <td>{genotype}</td>
+          <td>{collection_date}</td>
           <td>{assigned_by}</td>
           <td>{note}</td>
         </tr>
@@ -1396,13 +2002,23 @@ html_skeleton = r"""<!DOCTYPE html>
 
       <div class="tab-panels">
         <article id="panel1" class="tab-panel">
-          <h2>Sample</h2>
+          <h2>Sample Information</h2>
+          <p class="muted">
+            This page displays summarised information from cd-hit (<!--TOOL_VERSION_CD_HIT_EST_2D-->)
+            and BLAST (<!--TOOL_VERSION_BLASTN-->). Clade assignments, when available, were
+            performed with Nextclade (<!--TOOL_VERSION_NEXTCLADE-->), and mutation analysis was
+            provided by FluMut (<!--TOOL_VERSION_FLUMUT-->) using FluMutDB (<!--TOOL_VERSION_FLUMUTDB-->).
+          </p>
           <!--SAMPLE_CARD-->
           <!--SAMPLE_TABLE-->
         </article>
 
         <article id="panel2" class="tab-panel">
           <h2>Segment Background</h2>
+          <p class="muted">
+            Placements of sequences within the reported diversity. To examine cluster composition,
+            please refer to the cluster composition TSV file.
+          </p>
 
           <input class="vh" type="radio" id="hv-species" name="hostview" checked>
           <input class="vh" type="radio" id="hv-order"   name="hostview">
@@ -1436,6 +2052,12 @@ html_skeleton = r"""<!DOCTYPE html>
 
         <article id="panel3" class="tab-panel">
           <h2>Segment Mutations</h2>
+          <p class="muted">
+            Obtained using FluMut (<!--TOOL_VERSION_FLUMUT-->) running FluMutDB (<!--TOOL_VERSION_FLUMUTDB-->).
+            These mutations were further filtered for mutations of importance as cited by Alvarez et al. 2025
+            and Mohaptra et al. 2023. For a list of all mutations found, please refer to the final FluMut
+            spreadsheet report.
+          </p>
           <!--SEGMENT_MUTATIONS_TABLE-->
         </article>
 
@@ -1455,6 +2077,8 @@ def to_html_report(
     filename: str,
     genin2: bool = False,
     genin2table: str = '',
+    tool_versions: Optional[dict[str, Any]] = None,
+    tool_version_placeholder_tag: Optional[str] = None,
     html_skeleton: str = html_skeleton
 ) -> None:
     """
@@ -1478,6 +2102,13 @@ def to_html_report(
         Whether the GenIn2 tab should be included.
     genin2table : str, default ''
         HTML fragment for the GenIn2 tab.
+    tool_versions : dict, optional
+        Optional tool/version metadata, typically ``flags['Tool Versions']``.
+        When combined with ``tool_version_placeholder_tag``, the helper
+        ``apply_tool_version_placeholder()`` replaces that caller-provided tag.
+    tool_version_placeholder_tag : str, optional
+        Exact placeholder string to replace with rendered tool versions. No
+        built-in placeholder is injected into the skeleton automatically.
     html_skeleton : str, default ``html_skeleton``
         Template HTML document containing replacement markers.
 
@@ -1500,6 +2131,10 @@ def to_html_report(
         tab4_panel = """
         <article id="panel4" class="tab-panel">
           <h2>Genin2</h2>
+          <p class="muted">
+            GenIn2 performs genotype constellation assignment. This tab reports the
+            constellation assignment for this sample using GenIn2 (<!--TOOL_VERSION_GENIN2-->).
+          </p>
           <!--GENIN2_TABLE-->
         </article>
         """
@@ -1518,6 +2153,12 @@ def to_html_report(
 
     if genin2:
         html_content = html_content.replace('<!--GENIN2_TABLE-->', genin2table)
+
+    html_content = apply_tool_version_placeholder(
+        html_content,
+        tool_versions=tool_versions,
+        placeholder_tag=tool_version_placeholder_tag,
+    )
 
     with open(output_file_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
@@ -1773,8 +2414,10 @@ html_skeleton_multi = r"""
         <article id="panel1" class="tab-panel">
           <h2>Segment Background</h2>
           <p class="muted">
-            Segment-level identification summary for all sequences in the multi-FASTA.
-            Host and geography views can be toggled below.
+            Segment-level identification summary for all sequences in the multi-FASTA, combining
+            cd-hit (<!--TOOL_VERSION_CD_HIT_EST_2D-->) and BLAST (<!--TOOL_VERSION_BLASTN-->)
+            assignments. Host and geography views can be toggled below. To examine cluster
+            composition, please refer to the cluster composition TSV file.
           </p>
 
           <input type="radio" id="host-species" name="host-view" checked>
@@ -1807,7 +2450,7 @@ html_skeleton_multi = r"""
         <article id="panel2" class="tab-panel">
           <h2>Nextclade</h2>
           <p class="muted">
-            Clade calls reported by Nextclade for eligible HA sequences.
+            Clade calls reported by Nextclade (<!--TOOL_VERSION_NEXTCLADE-->) for eligible HA sequences.
           </p>
           <!--MULTI_NEXTCLADE_TABLE-->
         </article>
@@ -1815,8 +2458,9 @@ html_skeleton_multi = r"""
         <article id="panel3" class="tab-panel">
           <h2>FluMut</h2>
           <p class="muted">
-            Markers of interest detected by FluMut. Only mutations present in the
-            curated dictionary of mutations of interest are reported.
+            Markers of interest detected by FluMut (<!--TOOL_VERSION_FLUMUT-->) using
+            FluMutDB (<!--TOOL_VERSION_FLUMUTDB-->). Only mutations present in the curated
+            dictionary of mutations of interest are reported.
           </p>
           <!--MULTI_FLUMUT_TABLE-->
         </article>
@@ -1897,16 +2541,7 @@ def _segment_num_to_name(segment_cell: Any) -> str:
         One of ``PB2``, ``PB1``, ``PA``, ``HA``, ``NP``, ``NA``, ``MP``,
         ``NS``, or ``"Not Available"`` when parsing fails.
     """
-    seg_map = {
-        1: "PB2",
-        2: "PB1",
-        3: "PA",
-        4: "HA",
-        5: "NP",
-        6: "NA",
-        7: "MP",
-        8: "NS",
-    }
+    seg_map = {value: key for key, value in segment_to_number_iav.items()}
 
     seg_num = None
 
@@ -1938,7 +2573,14 @@ def _segment_num_to_name(segment_cell: Any) -> str:
     return seg_map.get(seg_num, "Not Available")
 
 
-def create_segment_background_table_multi(df_segments: str, seg_lens: dict, mappings: dict[str, str], formatted_fasta_fp: str) -> str:
+def create_segment_background_table_multi(
+    df_segments: str,
+    seg_lens: dict,
+    mappings: dict[str, str],
+    formatted_fasta_fp: str,
+    geo_dict: dict[str, tuple[str, str]],
+    taxa_dict: dict[str, list[str]],
+) -> str:
     """
     Create Segment Background table for consensus multi-sample mode.
 
@@ -1977,6 +2619,7 @@ def create_segment_background_table_multi(df_segments: str, seg_lens: dict, mapp
         'GENOTYPE': 'Unknown',
         'COUNTRY': 'Unknown',
         'REPRESENTATIVE': 'Not Available',
+        'COLLECTION_DATE': 'Unknown',
     }.items():
         if col not in df.columns:
             df[col] = default
@@ -1985,6 +2628,11 @@ def create_segment_background_table_multi(df_segments: str, seg_lens: dict, mapp
 
     # Derive canonical segment name directly from ID_Report
     df['SEGMENT_NAME'] = df['SEGMENT'].apply(_segment_num_to_name)
+    df = df.sort_values(
+        by='SEGMENT_NAME',
+        key=lambda series: series.map(lambda value: _segment_sort_key(value)),
+        kind='stable',
+    ).reset_index(drop=True)
 
     # Normalize SAMPLE_NAME before length mapping
     df['SAMPLE_NAME_NORM'] = df['SAMPLE_NAME'].astype(str).str.strip()
@@ -2032,6 +2680,7 @@ def create_segment_background_table_multi(df_segments: str, seg_lens: dict, mapp
         <th>%ID</th>
         <th>Cluster</th>
         <th>Genotype</th>
+        <th>Collection_date</th>
         <th>Assigned_By</th>
         <th>Note</th>
       </tr>
@@ -2043,9 +2692,10 @@ def create_segment_background_table_multi(df_segments: str, seg_lens: dict, mapp
         sample_name = str(df.loc[row, 'SAMPLE_NAME'])
         segment = df.loc[row, 'SEGMENT_NAME']
         length = int(df.loc[row, 'SEQ_LEN']) if not pd.isna(df.loc[row, 'SEQ_LEN']) else 0
-        reference = df.loc[row, 'REPRESENTATIVE'] if 'REPRESENTATIVE' in df.columns else "Not Available"
+        reference = _representative_link(df.loc[row, 'REPRESENTATIVE']) if 'REPRESENTATIVE' in df.columns else "Not Available"
         perc_id = df.loc[row, '%ID'] if '%ID' in df.columns else "NA"
         cluster = df.loc[row, 'CLUSTER'] if 'CLUSTER' in df.columns else "NA"
+        collection_date = _normalize_collection_date(df.loc[row, 'COLLECTION_DATE']) if 'COLLECTION_DATE' in df.columns else "Unknown"
         assigned_by = df.loc[row, 'ASSIGNED_BY'] if 'ASSIGNED_BY' in df.columns else "NA"
 
         note_parts = []
@@ -2113,6 +2763,7 @@ def create_segment_background_table_multi(df_segments: str, seg_lens: dict, mapp
           <td>{perc_id}</td>
           <td>{cluster}</td>
           <td>{genotype}</td>
+          <td>{collection_date}</td>
           <td>{assigned_by}</td>
           <td>{note}</td>
         </tr>
@@ -2384,6 +3035,8 @@ def to_html_report_multi(
     output_file_path: str,
     genin2: bool = False,
     genin2table: str = '',
+    tool_versions: Optional[dict[str, Any]] = None,
+    tool_version_placeholder_tag: Optional[str] = None,
     html_skeleton_multi: str = html_skeleton_multi
 ) -> None:
     """
@@ -2405,6 +3058,13 @@ def to_html_report_multi(
         Whether to enable the optional GenIn2 tab.
     genin2table : str, default ''
         Pre-rendered HTML for the GenIn2 tab.
+    tool_versions : dict, optional
+        Optional tool/version metadata, typically ``flags['Tool Versions']``.
+        When combined with ``tool_version_placeholder_tag``, the helper
+        ``apply_tool_version_placeholder()`` replaces that caller-provided tag.
+    tool_version_placeholder_tag : str, optional
+        Exact placeholder string to replace with rendered tool versions. No
+        built-in placeholder is injected into the skeleton automatically.
     html_skeleton_multi : str
         HTML skeleton template for multi-sample mode.
     """
@@ -2438,7 +3098,9 @@ def to_html_report_multi(
         <article id="panel4" class="tab-panel">
           <h2>Genin2</h2>
           <p class="muted">
-            Genotype constellation assignments reported by GenIn2.
+            GenIn2 performs genotype constellation assignment. This tab reports
+            constellation assignments for eligible samples in this analysis using
+            GenIn2 (<!--TOOL_VERSION_GENIN2-->).
           </p>
           {genin2table}
         </article>
@@ -2451,6 +3113,12 @@ def to_html_report_multi(
         html = html.replace('<!--TAB4_DISPLAY_CSS-->', '')
         html = html.replace('<!--TAB4_PANEL-->', '')
 
+    html = apply_tool_version_placeholder(
+        html,
+        tool_versions=tool_versions,
+        placeholder_tag=tool_version_placeholder_tag,
+    )
+
     with open(output_file_path, 'w', encoding='utf-8') as f:
         f.write(html)
 
@@ -2462,7 +3130,9 @@ def generate_final_report_single(
     muts_loci_meaning: dict,
     html_skeleton: str,
     output_file_path: str,
-    filename: str
+    filename: str,
+    geo_dict: dict[str, tuple[str, str]],
+    taxa_dict: dict[str, list[str]],
 ) -> None:
     """
     Generate the existing single-sample final HTML report.
@@ -2470,12 +3140,19 @@ def generate_final_report_single(
     sample_card = create_sample_card(flags)
 
     try:
-        sample_table = create_sample_table(df_segments, flags, seg_lens, mappings)
+        sample_table = create_sample_table(df_segments, flags, seg_lens, mappings, muts_loci_meaning)
     except Exception as exc:
         sample_table = _empty_card(f'Sample segment summary unavailable. {exc}')
 
     try:
-        seg_back_table = create_segment_background_table(df_segments, flags, seg_lens, mappings)
+        seg_back_table = create_segment_background_table(
+                            df_segments,
+                            flags,
+                            seg_lens,
+                            mappings,
+                            geo_dict=geo_dict,
+                            taxa_dict=taxa_dict,
+                        )
     except Exception as exc:
         seg_back_table = _empty_card(f'Segment background unavailable. {exc}')
 
@@ -2494,7 +3171,8 @@ def generate_final_report_single(
             mut_table=mut_table,
             output_file_path=output_file_path,
             genin2=True,
-            genin2table=genin2table
+            genin2table=genin2table,
+            tool_versions=flags.get('Tool Versions', {}),
         )
     else:
         to_html_report(
@@ -2504,7 +3182,8 @@ def generate_final_report_single(
             seg_back_table=seg_back_table,
             mut_table=mut_table,
             output_file_path=output_file_path,
-            genin2=False
+            genin2=False,
+            tool_versions=flags.get('Tool Versions', {}),
         )
 
 
@@ -2517,7 +3196,9 @@ def generate_final_report_multi(
     html_skeleton_multi: str,
     output_file_path: str,
     filename: str,
-    runs_p: str
+    runs_p: str,
+    geo_dict: dict[str, tuple[str, str]],
+    taxa_dict: dict[str, list[str]],
 ) -> None:
     """
     Generate the consensus multi-sample final HTML report.
@@ -2537,11 +3218,13 @@ def generate_final_report_multi(
 
     try:
         seg_back_table = create_segment_background_table_multi(
-            df_segments=df_segments,
-            seg_lens=seg_lens,
-            mappings=mappings,
-            formatted_fasta_fp=formatted_fasta_fp
-        )
+                        df_segments=df_segments,
+                        seg_lens=seg_lens,
+                        mappings=mappings,
+                        formatted_fasta_fp=formatted_fasta_fp,
+                        geo_dict=geo_dict,
+                        taxa_dict=taxa_dict,
+                        )
     except Exception as exc:
         seg_back_table = _empty_card(f'Segment background unavailable. {exc}')
 
@@ -2573,6 +3256,7 @@ def generate_final_report_multi(
             output_file_path=output_file_path,
             genin2=True,
             genin2table=genin2table,
+            tool_versions=flags.get('Tool Versions', {}),
             html_skeleton_multi=html_skeleton_multi
         )
     else:
@@ -2583,6 +3267,7 @@ def generate_final_report_multi(
             flumut_table=flumut_table,
             output_file_path=output_file_path,
             genin2=False,
+            tool_versions=flags.get('Tool Versions', {}),
             html_skeleton_multi=html_skeleton_multi
         )
 
@@ -2595,6 +3280,9 @@ def generate_final_report(
     html_skeleton: str,
     output_file_path: str,
     filename: str,
+    metadata_p: str,
+    geo: str,
+    taxa: str,
     runs_p: Optional[str] = None
 ) -> None:
     """
@@ -2606,28 +3294,37 @@ def generate_final_report(
     Multi-sample mode:
         uses the consensus multi-sample HTML report
     """
+    geo_dict, taxa_dict= load_reference_dicts(
+            data_dir=metadata_p,
+            geo_json_relpath=geo,
+            tax_json_relpath=taxa
+            )
     is_single = flags.get('Master', {}).get('single', True)
 
     if is_single:
         generate_final_report_single(
-            df_segments=df_segments,
-            flags=flags,
-            seg_lens=seg_lens,
-            mappings=mappings,
-            muts_loci_meaning=muts_loci_meaning,
-            html_skeleton=html_skeleton,
-            output_file_path=output_file_path,
-            filename=filename
+            df_segments,
+            flags,
+            seg_lens,
+            mappings,
+            muts_loci_meaning,
+            html_skeleton,
+            output_file_path,
+            filename,
+            geo_dict=geo_dict,
+            taxa_dict=taxa_dict,
         )
     else:
         generate_final_report_multi(
-            df_segments=df_segments,
-            flags=flags,
-            seg_lens=seg_lens,
-            mappings=mappings,
-            muts_loci_meaning=muts_loci_meaning,
-            html_skeleton_multi=html_skeleton_multi,
-            output_file_path=output_file_path,
-            filename=filename,
-            runs_p=runs_p
-            )
+            df_segments,
+            flags,
+            seg_lens,
+            mappings,
+            muts_loci_meaning,
+            html_skeleton,
+            output_file_path,
+            filename,
+            runs_p=runs_p,
+            geo_dict=geo_dict,
+            taxa_dict=taxa_dict,
+        )

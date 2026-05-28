@@ -20,9 +20,16 @@ from flu_utils import seq_get,dict_to_fasta,headers_from_mult_fas,parse_clstr,js
     concat_fasta,\
     seq_filter_get,mine_genotype_H,mine_genotype_N,convert_to_prop, mine_single_HA,mine_single_NA
 from metadata_utils import ClusterReportTable, ClusterMetadata, SequenceMetadata
-from structures import flagdict, taxa_dict, muts_loci_meaning , int_to_iupac, muts_interest,seg_lens, \
+from metadata_tree_utils import load_reference_dicts
+from structures import flagdict, muts_loci_meaning , int_to_iupac, muts_interest,seg_lens, \
     iav_segments, contig_single_min_floor_bp, contig_single_min_step_bp
-from final_report_utils import html_skeleton, generate_final_report, maybe_create_batch_artifacts
+from final_report_utils import (
+    html_skeleton,
+    export_cluster_composition,
+    export_id_report_rollup,
+    generate_final_report,
+    maybe_create_batch_artifacts,
+)
 from copy import deepcopy
 import pandas as pd
 from gb_utils import fetch_genbank_list, append_genbank_from_list, get_gb, create_lookup,\
@@ -443,15 +450,17 @@ def cluster_compile(s_dict: dict[str, str], cl_dict: dict[str, list[dict[str, in
             sample_assign[line[1]]='NA'
     compiler={}
     
-    #adding to the information sample:cluster,rep,identity the seg,gen and host ranges
+    #adding to the information sample:cluster,rep,identity the seg,gen, host, and collection date ranges
     for key in dict_sample:
         try:
             compiler[key]=[]
             compiler[key].append(sample_assign[key])
             compiler[key].append(dict_sample[key])
             if dict_sample[key]!='>Unassigned':
-                for id in dict_clust[dict_sample[key]]:
-                    compiler[key].append(id)
+                representative, genotypes, segments, hosts, countries, collection_date = _unpack_cluster_payload(
+                    dict_clust[dict_sample[key]]
+                )
+                compiler[key].extend([genotypes, segments, hosts, countries, collection_date, representative])
         except KeyError:
             print(f'Key: {key} not found')
             continue
@@ -461,12 +470,12 @@ def cluster_compile(s_dict: dict[str, str], cl_dict: dict[str, list[dict[str, in
     
     #outputting report
     with open(f'{outpath}','w') as report:
-        report.write('Sample_access\t%ID\tCluster\tCluster_rep\tGenotypes\tSegment\tHosts\tCountries\n')
+        report.write('Sample_access\t%ID\tCluster\tCluster_rep\tGenotypes\tSegment\tHosts\tCountries\tCollection_date\n')
         for sample in compiler:
             if len(compiler[sample])>2:
                 report.write(f'{sample}\t{compiler[sample][0]}\t\
-                            {compiler[sample][1]}\t{compiler[sample][6]}\t\
-                            {compiler[sample][2]}\t{compiler[sample][3]}\t{compiler[sample][4]}\t{compiler[sample][5]}\n')
+                            {compiler[sample][1]}\t{compiler[sample][7]}\t\
+                            {compiler[sample][2]}\t{compiler[sample][3]}\t{compiler[sample][4]}\t{compiler[sample][5]}\t{compiler[sample][6]}\n')
             elif len(compiler[sample])==0:
                 continue  
             else:
@@ -533,7 +542,7 @@ def cluster_miner(reports_p: str, file_tag: str, formatted_fasta_dir: str, runs_
 
         # Protect against short/incomplete rows without changing output shape
         safe_row = list(row) if row is not None else []
-        safe_row += [""] * max(0, 7 - len(safe_row))
+        safe_row += [""] * max(0, 8 - len(safe_row))
 
         to_report[key_str] = [
             str(safe_row[2]).replace(" ", "") if safe_row[2] is not None else "",
@@ -543,6 +552,7 @@ def cluster_miner(reports_p: str, file_tag: str, formatted_fasta_dir: str, runs_
             safe_row[3] if safe_row[3] is not None else "",
             safe_row[5] if safe_row[5] is not None else "",
             safe_row[6] if safe_row[6] is not None else "",
+            _normalize_collection_date(safe_row[7]),
             "CD-HIT"
         ]
 
@@ -643,19 +653,32 @@ def bclust(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str,
     b_tab=best_blast(runs_p,f"{file_tag}_bcrun.txt",thres_id=90.0)
     pd.set_option('display.max_colwidth', None)
     metadata=pd.read_table(os.path.join(metadata_p,metadata_f),index_col=False)
+    metadata_columns = {str(col).strip().upper(): col for col in metadata.columns}
+    cluster_col = metadata_columns.get('CLUSTER', 'Cluster')
+    representative_col = metadata_columns.get('REPRESENTATIVE', 'Representative')
+    segments_col = metadata_columns.get('SEGMENTS', 'Segments')
+    genotypes_col = metadata_columns.get('GENOTYPES', 'Genotypes')
+    hosts_col = metadata_columns.get('HOSTS', 'Hosts')
+    countries_col = metadata_columns.get('COUNTRIES', 'Countries')
+    collection_date_col = metadata_columns.get('COLLECTION_DATE') or metadata_columns.get('COLLECTION_DATE'.replace('_', ''))
     assigned=set(b_tab.keys())
     queries=set(queries)
     to_reblast=queries-assigned
     for key in b_tab:
-        b_tab[key].append(metadata['Cluster'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
-        b_tab[key].append(metadata['Segments'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
+        b_tab[key].append(metadata[cluster_col][metadata[representative_col]==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
+        b_tab[key].append(metadata[segments_col][metadata[representative_col]==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
         b_tab[key][3]=ast.literal_eval(b_tab[key][3])
-        b_tab[key].append(metadata['Genotypes'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
+        b_tab[key].append(metadata[genotypes_col][metadata[representative_col]==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
         b_tab[key][4]=ast.literal_eval(b_tab[key][4])
-        b_tab[key].append(metadata['Hosts'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
+        b_tab[key].append(metadata[hosts_col][metadata[representative_col]==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
         b_tab[key][5]=ast.literal_eval(b_tab[key][5])
-        b_tab[key].append(metadata['Countries'][metadata['Representative']==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
+        b_tab[key].append(metadata[countries_col][metadata[representative_col]==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None))
         b_tab[key][6]=ast.literal_eval(b_tab[key][6])
+        if collection_date_col is not None:
+            date_value = metadata[collection_date_col][metadata[representative_col]==b_tab[key][0]].to_string(index=False,min_rows=None,max_rows=None)
+        else:
+            date_value = ''
+        b_tab[key].append(_normalize_collection_date(date_value))
 
     if list(to_reblast) != []:
         for i in to_reblast:
@@ -713,11 +736,30 @@ def reblast(metadata_p:str,metadata_f:str,samples_p:str,blast_p:str,blast_db:str
     )
     report=best_blast(runs_p,f"{file_tag}_brun.txt")
     metadata=pd.read_csv(os.path.join(metadata_p,metadata_f),sep=';',index_col=False)
+    metadata_columns = {str(col).upper(): col for col in metadata.columns}
+    required_columns = ['ACCESSION', 'SEGMENT', 'GENOTYPE', 'HOST', 'COUNTRY']
+    missing_columns = [column for column in required_columns if column not in metadata_columns]
+    if missing_columns:
+        raise ValueError(
+            f"Metadata file {os.path.join(metadata_p, metadata_f)} is missing required columns: {', '.join(missing_columns)}"
+        )
+
+    accession_col = metadata_columns['ACCESSION']
+    segment_col = metadata_columns['SEGMENT']
+    genotype_col = metadata_columns['GENOTYPE']
+    host_col = metadata_columns['HOST']
+    country_col = metadata_columns['COUNTRY']
+    collection_date_col = metadata_columns.get('COLLECTION_DATE')
     for key in report:
-        report[key].append(metadata['SEGMENT'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
-        report[key].append(metadata['GENOTYPE'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
-        report[key].append(metadata['HOST'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
-        report[key].append(metadata['COUNTRY'][metadata['ACCESSION']==report[key][0]].to_string(index=False))
+        report[key].append(metadata[segment_col][metadata[accession_col]==report[key][0]].to_string(index=False))
+        report[key].append(metadata[genotype_col][metadata[accession_col]==report[key][0]].to_string(index=False))
+        report[key].append(metadata[host_col][metadata[accession_col]==report[key][0]].to_string(index=False))
+        report[key].append(metadata[country_col][metadata[accession_col]==report[key][0]].to_string(index=False))
+        if collection_date_col is not None:
+            date_value = metadata[collection_date_col][metadata[accession_col]==report[key][0]].to_string(index=False)
+            report[key].append(_normalize_collection_date(date_value))
+        else:
+            report[key].append('Unknown')
     return report
 
 #### REPORT COMPILER
@@ -764,6 +806,7 @@ def report_compiler(clust_dict: dict[str, list[str | dict[str, int | float]]], s
                 to_report[key].append(convert_to_prop(bclust_dict[key][4]))
                 to_report[key].append(convert_to_prop(bclust_dict[key][5]))
                 to_report[key].append(convert_to_prop(bclust_dict[key][6]))
+                to_report[key].append(_normalize_collection_date(bclust_dict[key][7]))
                 to_report[key].append('C-BLAST')
     if blast_dict:
         for key in blast_dict:
@@ -776,6 +819,7 @@ def report_compiler(clust_dict: dict[str, list[str | dict[str, int | float]]], s
                 to_report[key].append(blast_dict[key][3].replace(' ',''))
                 to_report[key].append(blast_dict[key][4])
                 to_report[key].append(blast_dict[key][5].replace(' ',''))
+                to_report[key].append(_normalize_collection_date(blast_dict[key][6]))
                 to_report[key].append('L-BLAST')
     assigned=set(to_report.keys())
     seqs=set(seqs)
@@ -783,15 +827,15 @@ def report_compiler(clust_dict: dict[str, list[str | dict[str, int | float]]], s
     mappings=mappings_dict
     if list(to_remote)!=[]:
         for seq in to_remote:
-            to_report[seq]=['Unassigned','NA','NA','NA','NA','NA','NA','NA']
+            to_report[seq]=['Unassigned','NA','NA','NA','NA','NA','NA','Unknown','NA']
     with open(os.path.join(reports_p, f'{file_tag}_ID_Report.txt'), 'w') as report:
-        report.write('Sample_name\tRepresentative\tCluster\t%ID\tSegment\tGenotype\tHost\tCountry\tAssigned_by\n'.upper())
+        report.write('Sample_name\tRepresentative\tCluster\t%ID\tSegment\tGenotype\tHost\tCountry\tCollection_date\tAssigned_by\n'.upper())
         for key in to_report:
             mapped=mappings[f'>{key}']
             #print(to_report[key])
             report.write(f'{mapped}\t{to_report[key][0]}\t\
                          {to_report[key][1]}\t{to_report[key][2]}\t{to_report[key][3]}\t\
-                            {to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\t{to_report[key][7]}\n')
+                            {to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\t{to_report[key][7]}\t{to_report[key][8]}\n')
     if len(list(to_remote))>0:
         flags['BLAST']['Sequences unassigned against local database'].extend(to_remote)
     #print(f'Report generated in {os.path.join(reports_p,filename.replace(".fasta",""))}_ID_Report.txt')
@@ -952,6 +996,37 @@ def safe_literal_eval(x: Any) -> Any:
         return ast.literal_eval(s)
     except Exception:
         return x
+
+
+def _normalize_collection_date(value: Any) -> str:
+    """Normalize missing or blank collection dates for report output."""
+    if pd.isna(value):
+        return 'Unknown'
+
+    text = str(value).strip()
+    return text if text else 'Unknown'
+
+
+def _unpack_cluster_payload(payload: list[Any]) -> tuple[str, Any, Any, Any, Any, str]:
+    """Support both legacy and Collection_date-aware cluster payload shapes."""
+    if len(payload) >= 6:
+        return (
+            str(payload[5]).strip(),
+            payload[0],
+            payload[1],
+            payload[2],
+            payload[3],
+            _normalize_collection_date(payload[4]),
+        )
+
+    return (
+        str(payload[4]).strip() if len(payload) >= 5 else '',
+        payload[0] if len(payload) >= 1 else {},
+        payload[1] if len(payload) >= 2 else {},
+        payload[2] if len(payload) >= 3 else {},
+        payload[3] if len(payload) >= 4 else {},
+        'Unknown',
+    )
 def redirector(report: str, flags: dict, file_tag: str, mappings: dict[str, str], runs_p: str, reports_p: str,
                force_flumut: bool, force_genin: bool, force_getref: bool, mode: str, single_sample: bool = True) -> None:
     """
@@ -1012,7 +1087,9 @@ def redirector(report: str, flags: dict, file_tag: str, mappings: dict[str, str]
             else:
                 print("keep_original empty: keeping original report unchanged")
         report_df.to_csv(os.path.join(reports_p,report),sep='\t',index=False)
-    report_df=report_df.dropna()
+    if 'COLLECTION_DATE' in report_df.columns:
+        report_df['COLLECTION_DATE'] = report_df['COLLECTION_DATE'].apply(_normalize_collection_date)
+    report_df=report_df.dropna(subset=['SAMPLE_NAME', 'SEGMENT'])
     report_df['SEGMENT'] = report_df['SEGMENT'].apply(safe_literal_eval)
     report_df['SEGMENT']=report_df['SEGMENT'].apply(lambda x: list(x.keys())[0] if type(x)==dict else int(x))
     Segments=report_df['SEGMENT'].to_list()
@@ -1964,6 +2041,8 @@ def run_batch_pipeline(
     rm_previous: bool,
     max_len: int,
     min_len: int,
+    geo: str,
+    taxa:str ,
     skip_cdhit: bool,
     write_tool_versions_tsv: bool,
 ) -> int:
@@ -2029,6 +2108,8 @@ def run_batch_pipeline(
                 rm_previous=rm_previous,
                 max_len=max_len,
                 min_len=min_len,
+                geo=geo,
+                taxa=taxa,
                 skip_cdhit=skip_cdhit,
                 batch=True,
                 batch_dir=batch_name,
@@ -2121,7 +2202,28 @@ def run_batch_pipeline(
     if write_tool_versions_tsv and batch_tool_versions:
         _write_tool_versions_tsv(batch_artifact_root, batch_name, batch_tool_versions)
 
-    maybe_create_batch_artifacts(batch_artifact_root, batch_summary_fp)
+    batch_cluster_composition_name = f'{batch_name}_cluster_composition.tsv'
+    successful_id_report_fps = [
+        os.path.join(
+            batch_artifact_root,
+            str(row.get('reports_dir_rel', '')).strip(),
+            f"{str(row.get('file_tag', '')).strip()}_ID_Report.txt",
+        )
+        for row in results
+        if str(row.get('status', '')).strip().lower() == 'ok' and str(row.get('file_tag', '')).strip()
+    ]
+    export_cluster_composition(
+        id_report_fps=successful_id_report_fps,
+        metadata_csv_fp=os.path.join(metadata_p, config['Filenames']['metadata']),
+        cluster_clstr_fp=os.path.join(clusters_p, config['Filenames']['cluster_clstr']),
+        output_fp=os.path.join(batch_artifact_root, batch_cluster_composition_name),
+    )
+
+    maybe_create_batch_artifacts(
+        batch_artifact_root,
+        batch_summary_fp,
+        extra_files=[batch_cluster_composition_name],
+    )
 
     if failures or batch_flumut_error:
         print("\nBatch completed with failures:")
@@ -2531,6 +2633,8 @@ def run_pipeline_for_file(
     rm_previous: bool,
     max_len: int,
     min_len: int,
+    geo: str,
+    taxa: str,
     skip_cdhit: bool = False,
     batch: bool = False,
     batch_dir: str = '',
@@ -2538,7 +2642,7 @@ def run_pipeline_for_file(
     output_name: Optional[str] = None,
     capture_tool_versions: bool = True,
     write_tool_versions_tsv: bool = False,
-    batch_tool_versions: Optional[dict[str, str]] = None,
+    batch_tool_versions: Optional[dict[str, str]] = None
 ) -> None:
     """
     Run full AFluID pipeline for one FASTA file.
@@ -2839,6 +2943,25 @@ def run_pipeline_for_file(
         single_sample=single
     )
 
+    geo_dict, taxa_dict = load_reference_dicts(
+        data_dir=metadata_p,
+        geo_json_relpath=geo,
+        tax_json_relpath=taxa,
+    )
+    export_id_report_rollup(
+        id_report_fp=id_report_fp,
+        output_fp=os.path.join(active_reports_p, f'{output_tag}_ID_Report_rollup.tsv'),
+        geo_dict=geo_dict,
+        taxa_dict=taxa_dict,
+    )
+    if not batch:
+        export_cluster_composition(
+            id_report_fps=[id_report_fp],
+            metadata_csv_fp=os.path.join(metadata_p, config['Filenames']['metadata']),
+            cluster_clstr_fp=os.path.join(clusters_p, config['Filenames']['cluster_clstr']),
+            output_fp=os.path.join(active_reports_p, f'{output_tag}_cluster_composition.tsv'),
+        )
+
     _set_tool_status(flags, 'flumut', 'skipped', 'FluMut routing not enabled for this sample')
     flumut_input_fp = os.path.join(runs_p, f'{output_tag}_to_flumut.fasta')
     if flags['Master']['flumut']:
@@ -2970,16 +3093,18 @@ def run_pipeline_for_file(
         _require_files([id_report_fp], 'Final report generation requires the ID report')
         try:
             generate_final_report(
-                id_report_fp,
-                flags,
-                seg_lens,
-                mappings,
-                muts_loci_meaning,
-                html_skeleton,
-                os.path.join(active_reports_p, f'{output_tag}_final_report.html'),
-                f'{output_tag}_final_report',
-                runs_p=runs_p
-                )
+                        id_report_fp,
+                        flags,
+                        seg_lens,
+                        mappings,
+                        muts_loci_meaning,
+                        html_skeleton,
+                        os.path.join(active_reports_p, f'{output_tag}_final_report.html'),
+                        f'{output_tag}_final_report',
+                        runs_p=runs_p,
+                        metadata_p=metadata_p,
+                        geo=geo,
+                        taxa=taxa)
             _set_tool_status(flags, 'final_report', 'completed')
         except Exception as exc:
             _set_tool_status(flags, 'final_report', 'failed', str(exc))
@@ -3038,6 +3163,8 @@ def main(flagdict: dict = flagdict) -> None:
     blasts = config['Paths']['blast_database']
     clusters = config['Paths']['cluster_database']
     metadata = config['Paths']['metadata']
+    geo_json=config['Filenames']['geo']
+    taxa_json=config['Filenames']['taxa']
 
     rm_previous = config['Functions']['remove_previous'] if args.remove_previous.lower() == 'on' else False
 
@@ -3156,6 +3283,8 @@ def main(flagdict: dict = flagdict) -> None:
                 rm_previous=rm_previous,
                 max_len=max_len,
                 min_len=min_len,
+                geo=geo_json,
+                taxa=taxa_json,
                 skip_cdhit=skip_cdhit,
                 write_tool_versions_tsv=write_tool_versions_tsv,
             )
@@ -3215,6 +3344,8 @@ def main(flagdict: dict = flagdict) -> None:
                         rm_previous=rm_previous,
                         max_len=max_len,
                         min_len=min_len,
+                        geo=geo_json,
+                        taxa=taxa_json,
                         skip_cdhit=skip_cdhit,
                         write_tool_versions_tsv=write_tool_versions_tsv,
                     )
@@ -3282,6 +3413,8 @@ def main(flagdict: dict = flagdict) -> None:
             rm_previous=rm_previous,
             max_len=max_len,
             min_len=min_len,
+            geo=geo_json,
+            taxa=taxa_json,
             skip_cdhit=skip_cdhit,
             batch=False,
             batch_dir='',

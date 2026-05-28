@@ -19,6 +19,8 @@ conda env create -f env.yaml
 ```
 3. If you haven't downloaded the dataset yet I recommend using NCBI virus, searching for **Influenza A virus**, filter for **Complete Assemblies** and download all sequences. Also don't forget to **Activate the conda environment using:** ```conda activate fluid```
 
+   **Warning:** the AFluID database is built and updated from complete assemblies with correctly annotated sequences only. Assemblies that are incomplete, contain low-quality sequence, or have missing or incorrect metadata should be rejected before building or updating the database, otherwise cluster annotations and downstream reports may become unreliable.
+
 4. Use **dbSetup.py** to filter out all the sequences that are not included within the metadata table:
 ```
 python3 dbSetup.py  [PATH_TO_METADATA_FILE] [PATH_TO_FASTA_FILE] [OUTPUT_FILE_NAME]
@@ -129,6 +131,9 @@ The following diagram illustrates the pipeline workflow:
 The user can and should update AFluID to better represent the genomic diversity of the current flu season or the new circulating variants of non-seasonal Influenza A.
 The update can be made using the update.py module. 
 The user should go to NCBI Virus and download the sequence metadata with matching headers to the metadata, and keeping the column header case as is. The values should be from the date os the provious updato to the present. A fasta file with the same sequences should also be downloaded, from the same database.
+
+**Warning:** update inputs should follow the same curation rules as the original database build. Only complete assemblies with correctly annotated sequences should be added. Incomplete assemblies, low-quality sequence, or records with missing or incorrect metadata must be excluded from the update set.
+
 These files will need to be placed in the 
 ``update/`` directory and declared within the command run:
 ```

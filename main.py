@@ -829,13 +829,13 @@ def report_compiler(clust_dict: dict[str, list[str | dict[str, int | float]]], s
         for seq in to_remote:
             to_report[seq]=['Unassigned','NA','NA','NA','NA','NA','NA','Unknown','NA']
     with open(os.path.join(reports_p, f'{file_tag}_ID_Report.txt'), 'w') as report:
-        report.write('Sample_name\tRepresentative\tCluster\t%ID\tSegment\tGenotype\tHost\tCountry\tCollection_date\tAssigned_by\n'.upper())
+        report.write('Sample_name\tSegment\tCluster\tRepresentative\t%ID\tAssigned_by\tGenotype\tHost\tCountry\tCollection_date\n'.upper())
         for key in to_report:
             mapped=mappings[f'>{key}']
             #print(to_report[key])
-            report.write(f'{mapped}\t{to_report[key][0]}\t\
-                         {to_report[key][1]}\t{to_report[key][2]}\t{to_report[key][3]}\t\
-                            {to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\t{to_report[key][7]}\t{to_report[key][8]}\n')
+            report.write(f'{mapped}\t{to_report[key][3]}\t\
+                         {to_report[key][1]}\t{to_report[key][0]}\t{to_report[key][2]}\t\
+                            {to_report[key][8]}\t{to_report[key][4]}\t{to_report[key][5]}\t{to_report[key][6]}\t{to_report[key][7]}\n')
     if len(list(to_remote))>0:
         flags['BLAST']['Sequences unassigned against local database'].extend(to_remote)
     #print(f'Report generated in {os.path.join(reports_p,filename.replace(".fasta",""))}_ID_Report.txt')

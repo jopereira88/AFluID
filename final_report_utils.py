@@ -1608,15 +1608,15 @@ def create_segment_background_table(
       <tr>
         <th>Segment</th>
         <th>Length</th>
-        <th>Reference</th>
-        <th>Host</th>
-        <th>Geography</th>
-        <th>%ID</th>
-        <th>Cluster</th>
-        <th>Genotype</th>
-        <th>Collection_date</th>
-        <th>Assigned_By</th>
         <th>Note</th>
+        <th>Cluster</th>
+        <th>Reference</th>
+        <th>%ID</th>
+        <th>Assigned_By</th>
+        <th>Genotype</th>
+        <th>Host</th>
+        <th>Country</th>
+        <th>Collection_date</th>
       </tr>
     </thead>
     <tbody>"""
@@ -1709,7 +1709,12 @@ def create_segment_background_table(
         <tr>
           <td>{segment}</td>
           <td>{length_html}</td>
+          <td>{note}</td>
+          <td>{cluster}</td>
           <td>{reference}</td>
+          <td>{perc_id}</td>
+          <td>{assigned_by}</td>
+          <td>{genotype}</td>
           <td>
             <span class="host host--species">{host_species}</span>
             <span class="host host--order">{host_order}</span>
@@ -1720,12 +1725,7 @@ def create_segment_background_table(
             <span class="geo geo--region">{geo_regions}</span>
             <span class="geo geo--continent">{geo_continents}</span>
           </td>
-          <td>{perc_id}</td>
-          <td>{cluster}</td>
-          <td>{genotype}</td>
           <td>{collection_date}</td>
-          <td>{assigned_by}</td>
-          <td>{note}</td>
         </tr>
         """
 
@@ -2674,15 +2674,15 @@ def create_segment_background_table_multi(
         <th>Sample Name</th>
         <th>Segment</th>
         <th>SeqLen</th>
-        <th>Reference</th>
-        <th>Host</th>
-        <th>Geography</th>
-        <th>%ID</th>
-        <th>Cluster</th>
-        <th>Genotype</th>
-        <th>Collection_date</th>
-        <th>Assigned_By</th>
         <th>Note</th>
+        <th>Cluster</th>
+        <th>Reference</th>
+        <th>%ID</th>
+        <th>Assigned_By</th>
+        <th>Genotype</th>
+        <th>Host</th>
+        <th>Country</th>
+        <th>Collection_date</th>
       </tr>
     </thead>
     <tbody>
@@ -2749,7 +2749,12 @@ def create_segment_background_table_multi(
           <td>{sample_name}</td>
           <td>{segment}</td>
           <td>{length_html}</td>
+          <td>{note}</td>
+          <td>{cluster}</td>
           <td>{reference}</td>
+          <td>{perc_id}</td>
+          <td>{assigned_by}</td>
+          <td>{genotype}</td>
           <td>
             <span class="host host--species">{host_species}</span>
             <span class="host host--order">{host_order}</span>
@@ -2760,12 +2765,7 @@ def create_segment_background_table_multi(
             <span class="geo geo--region">{geo_regions}</span>
             <span class="geo geo--continent">{geo_continents}</span>
           </td>
-          <td>{perc_id}</td>
-          <td>{cluster}</td>
-          <td>{genotype}</td>
           <td>{collection_date}</td>
-          <td>{assigned_by}</td>
-          <td>{note}</td>
         </tr>
         """
 

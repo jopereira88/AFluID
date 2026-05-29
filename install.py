@@ -9,10 +9,19 @@ from datetime import date
 from flu_utils import parse_clstr
 from collections import Counter
 import json
+from pathlib import Path
 
 
 def _normalize_header(name: str) -> str:
     return name.strip().upper()
+
+
+def _resolve_config_path(raw_path: str, project_root: Path) -> str:
+    """Resolve config paths relative to the project root unless already absolute."""
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    return str((project_root / path).resolve())
 
 
 def _parse_collection_date(value: str) -> tuple[date, str] | None:
@@ -158,7 +167,8 @@ def cluster_charact(metadata: str,metadata_p: str,clstr: str,cluster_p: str,clus
             )
 
 if __name__ == '__main__':
-    config_file=sys.argv[1]
+    config_file = str(Path(sys.argv[1]).expanduser().resolve())
+    project_root = Path(__file__).resolve().parent
 
     #check if config is available
     if not os.path.exists(config_file):
@@ -168,12 +178,11 @@ if __name__ == '__main__':
     #read config file
     config = configparser.ConfigParser()
     config.read(config_file)
-    cwd=os.getcwd()
     if 'update_reports' not in config['Paths']:
         config['Paths']['update_reports'] = 'update/reports'
     #check if required paths exist
     for path in ['samples', 'runs', 'references', 'reports', 'update_reports', 'logs', 'blast_database', 'cluster_database', 'metadata','update']:
-        full_path = os.path.abspath(os.path.join(cwd, config['Paths'][path]))
+        full_path = _resolve_config_path(config['Paths'][path], project_root)
         os.makedirs(full_path, exist_ok=True)
         # Update config object in memory so subsequent calls use the full path
         config['Paths'][path] = full_path
@@ -185,27 +194,30 @@ if __name__ == '__main__':
     references=config['Filenames']['ref_db']
     geo_json=config['Filenames']['geo']
     taxa_json=config['Filenames']['taxa']
-    if not os.path.exists(metadata):
+    metadata_source = project_root / metadata
+    references_source = project_root / references
+    if not metadata_source.exists():
         print(f'Error: {metadata} not found.')
         sys.exit(1)
     else:
-        shutil.move(metadata,os.path.join(config['Paths']['metadata'],metadata))
+        shutil.move(str(metadata_source), os.path.join(config['Paths']['metadata'], metadata))
     for filename in [geo_json, taxa_json]:
         metadata_target = os.path.join(config['Paths']['metadata'], filename)
-        if os.path.exists(filename):
-            shutil.move(filename, metadata_target)
+        source_path = project_root / filename
+        if source_path.exists():
+            shutil.move(str(source_path), metadata_target)
             continue
         if os.path.exists(metadata_target):
             print(f'{filename} already exists in metadata. Skipping move.')
             continue
         print(f'Error: {filename} not found.')
         sys.exit(1)
-    if not os.path.exists(references):
-        with open(references,'a') as f:
-            os.utime(references,None)
-            shutil.move(references,os.path.join(config['Paths']['references'],references))
+    if not references_source.exists():
+        with open(references_source,'a') as f:
+            os.utime(references_source, None)
+            shutil.move(str(references_source), os.path.join(config['Paths']['references'], references))
     else:
-        shutil.move(references,os.path.join(config['Paths']['references'],references))
+        shutil.move(str(references_source), os.path.join(config['Paths']['references'], references))
     print('Files moved successfully.')
     print('Creating blast database...')
     #create blast database

@@ -15,8 +15,10 @@ import os
 import sys
 import glob
 import tarfile
+import subprocess
 from datetime import datetime
 from typing import Any, Iterable
+from pathlib import Path
 from main import fasta_preprocess, cd_hit_est_2d, cluster_assign, cluster_compile, cluster_miner, bclust, reblast, report_compiler
 
 
@@ -53,6 +55,14 @@ def update_ini_config(config_path: str, updates: dict) -> None:
 
     with open(config_path, "w", encoding="utf-8") as f:
         config.write(f)
+
+
+def resolve_config_path(raw_path: str, project_root: Path) -> str:
+    """Resolve config-managed paths relative to the project root unless absolute."""
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    return str((project_root / path).resolve())
 
 
 # Value normalization and transformation funcs
@@ -651,14 +661,14 @@ def main() -> None:
     """
     ##### LOADING VARIABLES
     arg=args()
-    config_file=arg.config
+    config_file=str(Path(arg.config).expanduser().resolve())
+    project_root = Path(__file__).resolve().parent
     config=configparser.ConfigParser()
     config.read(config_file)
     flags=deepcopy(flagdict)
     fasta_filename=arg.fastafile
     old_fasta=f'{config["Filenames"]["l_blast"]}.fasta'
     new_metadata_filename=arg.metadatafile
-    cwd=os.getcwd()
     if 'update_reports' not in config['Paths']:
         config['Paths']['update_reports'] = 'update/reports'
     update, runs, references, update_reports, logs = config['Paths']['update'], config['Paths']['runs'],\
@@ -667,11 +677,14 @@ def main() -> None:
         config['Paths']['metadata']
     rm_previous=config['Functions']['remove_previous'] if\
         arg.remove_previous.lower()=='on' else False
-    update_p, runs_p=os.path.abspath(os.path.join(cwd,update)), os.path.abspath(os.path.join(cwd,runs))
-    references_p = os.path.abspath(os.path.join(cwd,references))
-    update_reports_p = os.path.abspath(os.path.join(cwd, update_reports))
-    logs_p,blasts_p =os.path.abspath(os.path.join(cwd,logs)),os.path.abspath(os.path.join(cwd,blasts)) 
-    clusters_p, metadata_p=os.path.abspath(os.path.join(cwd,clusters)), os.path.abspath(os.path.join(cwd,metadata))
+    update_p = resolve_config_path(update, project_root)
+    runs_p = resolve_config_path(runs, project_root)
+    references_p = resolve_config_path(references, project_root)
+    update_reports_p = resolve_config_path(update_reports, project_root)
+    logs_p = resolve_config_path(logs, project_root)
+    blasts_p = resolve_config_path(blasts, project_root)
+    clusters_p = resolve_config_path(clusters, project_root)
+    metadata_p = resolve_config_path(metadata, project_root)
     threads, num_seqs =int(config['blast']['num_threads']), int(config['blast']['max_target_seqs'])
     max,min=int(config["Sequence_Size"]["max"]), int(config["Sequence_Size"]["min"])
     date=datetime.now().strftime("%Y%m%d")
@@ -782,15 +795,15 @@ def main() -> None:
 
     #### STEP 6 - CONCATENATING FASTAS AND METADATA FILES
     ##### STEP 6.1 - BACKUP
-    if os.listdir(metadata_p) and not os.path.exists(f'flu_metadata_{date}_.csv'):
+    if os.listdir(metadata_p) and not os.path.exists(project_root / f'flu_metadata_{date}_.csv'):
         print("Creating backup and updating databases")
-        backup_path='update_backup.tar.gz'
-        source_files=[old_fasta,os.path.join(metadata_p,config["Filenames"]["metadata"]),config_file]
+        backup_path = project_root / 'update_backup.tar.gz'
+        source_files=[project_root / old_fasta, os.path.join(metadata_p,config["Filenames"]["metadata"]), config_file]
         with tarfile.open(backup_path, "w:gz") as tar:
             for file_path in source_files:
                 tar.add(file_path, arcname=os.path.basename(file_path))
     ##### STEP 6.2 - CONCATENATION
-        with open(old_fasta, 'a') as f:
+        with open(project_root / old_fasta, 'a') as f:
             for header, seq in new_seqs.items():
                 f.write(f"{header}\n{seq}\n")
         rename_map={col:col.upper() for col in new_metadata.columns}
@@ -800,8 +813,8 @@ def main() -> None:
                 new_metadata[col] = pd.NA
         new_metadata=new_metadata[main_metadata.columns]
         metadata_concat=pd.concat([main_metadata,new_metadata], ignore_index=True)
-        metadata_concat.to_csv(f"flu_metadata_{date}_.csv",index=False,sep=';')
-        os.rename(old_fasta,f'sequencesDnaInf_{date}'+'.fasta')
+        metadata_concat.to_csv(project_root / f"flu_metadata_{date}_.csv",index=False,sep=';')
+        os.rename(project_root / old_fasta, project_root / (f'sequencesDnaInf_{date}' + '.fasta'))
     #### STEP 7 - INSTALLATION
     ##### STEP 7.1 - UPDATING FILENAMES
         print("Regenerating databases")
@@ -819,11 +832,13 @@ def main() -> None:
         for file in glob.glob(os.path.join(clusters_p, "*")):
             os.remove(file)
         for file in glob.glob(os.path.join(metadata_p, "*")):
+            if os.path.basename(file) in {config['Filenames']['geo'], config['Filenames']['taxa']}:
+                continue
             os.remove(file)
         update_ini_config(config_file, config_updates)
     
     ###### STEP 7.2 - RE-RUNNING INSTALL ROUTINE
-    os.system(f"python3 install.py {config_file}")
+    subprocess.run([sys.executable, str(project_root / 'install.py'), config_file], check=True)
 
 if __name__ == "__main__":
     main()

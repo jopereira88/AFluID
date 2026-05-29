@@ -3,6 +3,14 @@ Pipeline for Influenza A virus segment and genotype identification though homolg
 
 ## Installation
 
+### Path policy
+- Run maintenance commands from the AFluID project root. This includes `install.py` and `update.py`.
+- The configuration file may be passed as either a relative or absolute path, but AFluID resolves it to an absolute path at startup and uses that absolute path for the rest of the run.
+- Paths defined under `[Paths]` in `config.ini` may be absolute or relative.
+- Absolute paths under `[Paths]` are used as written.
+- Relative paths under `[Paths]` are resolved relative to the project root.
+- Maintenance input files required by `install.py` and `update.py` remain rooted at the project root.
+
 ### Requirements
 1. Anaconda or Miniconda installed and wsl or unix/linux command line
 2. A fasta file with several fully assembled sequences of multiple influenza segments: I got the dataset I used from NCBI virus database.
@@ -25,16 +33,23 @@ conda env create -f env.yaml
 ```
 python3 dbSetup.py  [PATH_TO_METADATA_FILE] [PATH_TO_FASTA_FILE] [OUTPUT_FILE_NAME]
 ``` 
-I recommend you use the cwd as a path for now and the names of metadata and output files equal to the ones in **config.ini**
+Place the maintenance input files in the project root and keep their names aligned with the entries in **config.ini**.
   * Should you have all the sequences you need the script will output a file with all the fasta sequences that you have that are on the metadata file
   * If your sequence FASTA file is incomplete, the script will output a .txt file with the missing sequences' accession numbers for you to download and concatenate to your main file
 
 5. If you haven't done so yet, open the config.ini file in a notepad program (notepad, notepad++, sublime text...) or nano to change any settings you deem necessary for your analysis. **You also need to specify your email and conda environment path**.
 
+   Required maintenance input files in the project root:
+   * metadata CSV defined by `Filenames.metadata`
+   * reference GenBank file defined by `Filenames.ref_db`
+   * `geo_tree.json`
+   * `host_taxonomy_tree.json`
+
 6. Run the installation script using the command:
 ```
 python3 install.py config.ini
 ```
+   `install.py` must be run from the project root. Paths defined under `[Paths]` in `config.ini` may be absolute or relative: absolute paths are used as written, while relative paths are resolved relative to the project root.
 7. This will create the directory tree and the database files. **Depending on the size of your data and the speed of your computer every step can take a fair bit of time**
 
 ## Running the pipeline
@@ -69,6 +84,8 @@ The pipeline also runs 2 different modes and its behaviour can be altered by sev
      This optional mode allows AFluID to inspect one multifasta input, gather records by a repeated sample identifier captured by a user-provided regex, and run the result as batch single-sample mode. ```--bf-regex``` is mandatory with ```--batch_fasta``` and must capture only the sample identifier, either with a named group ``sample`` or with the first capture group. If every header matches, the file is demultiplexed and processed as ```-b -ss on```. If any header fails, the run stops unless ```--force-bf``` is provided, in which case the original file is processed as a multi-sample FASTA (effective ```-ss off```). Original FASTA headers are preserved unchanged in the demultiplexed files. Demultiplexed FASTA filenames are sanitized to filesystem-safe names derived from the captured sample identifier, and a short deterministic suffix is added only if two captured identifiers would otherwise collide on disk.
 * Replace outputs (*argument: --replace*):
      Prevent accidental overwrites by default. If the target output directory already exists, the run will fail unless ```--replace``` is provided, in which case the existing output directory is deleted and recreated before the run starts.
+
+The main pipeline may be launched from outside the project root, but any relative paths defined under `[Paths]` in `config.ini` are still interpreted relative to the project root, not the shell working directory.
 
 To run the pipeline **place the sample fasta files in the ```samples/``` folder**. You only need to specify the name of the file to be analysed as the pipeline will automatically search for the sample files in the ```samples/``` folder
 
@@ -129,7 +146,7 @@ The following diagram illustrates the pipeline workflow:
 
 ## Update
 The user can and should update AFluID to better represent the genomic diversity of the current flu season or the new circulating variants of non-seasonal Influenza A.
-The update can be made using the update.py module. 
+The update can be made using the update.py module. `update.py` is a maintenance command and must be run from the project root.
 The user should go to NCBI Virus and download the sequence metadata with matching headers to the metadata, and keeping the column header case as is. The values should be from the date os the provious updato to the present. A fasta file with the same sequences should also be downloaded, from the same database.
 
 **Warning:** update inputs should follow the same curation rules as the original database build. Only complete assemblies with correctly annotated sequences should be added. Incomplete assemblies, low-quality sequence, or records with missing or incorrect metadata must be excluded from the update set.
@@ -139,6 +156,7 @@ These files will need to be placed in the
 ```
 python3 update.py -c CONFIG_FILE -ff UPDATE_FASTA -mf UPDATE_CSV
 ```
+As with installation, the configuration file is normalized to an absolute path at startup. Paths defined under `[Paths]` in `config.ini` may be absolute or relative: absolute paths are used as written, and relative paths are resolved relative to the project root.
 Depending on the size of the sequence database the update can take a long while so it's recommended you use a screen if working on a shared server.
 
 Update validation reports are written to the dedicated path configured as ```update_reports``` under ```[Paths]``` in ```config.ini```, so update runs stay isolated from normal pipeline report outputs. Older configs that do not define ```update_reports``` fall back to ```update/reports``` automatically.

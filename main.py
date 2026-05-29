@@ -1937,6 +1937,14 @@ def resolve_output_root(cwd: str, outdir: Optional[str]) -> Optional[str]:
     return str(path.resolve())
 
 
+def resolve_config_path(raw_path: str, project_root: Path) -> str:
+    """Resolve config-managed paths relative to the project root unless absolute."""
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    return str((project_root / path).resolve())
+
+
 def resolve_single_sample_output_paths(
     filename: str,
     default_reports_p: str,
@@ -3128,8 +3136,9 @@ def main(flagdict: dict = flagdict) -> None:
     """Main entry point for the pipeline."""
     args = parser()
     cwd = os.getcwd()
+    project_root = Path(__file__).resolve().parent
 
-    config_file = args.config
+    config_file = str(Path(args.config).expanduser().resolve())
     mode = args.mode
     update_flumut = args.update_flumut_db
     off_apps = args.turn_off
@@ -3168,14 +3177,14 @@ def main(flagdict: dict = flagdict) -> None:
 
     rm_previous = config['Functions']['remove_previous'] if args.remove_previous.lower() == 'on' else False
 
-    samples_p = os.path.abspath(os.path.join(cwd, samples))
-    runs_root_p = os.path.abspath(os.path.join(cwd, runs))
-    references_p = os.path.abspath(os.path.join(cwd, references))
-    reports_p = os.path.abspath(os.path.join(cwd, reports))
-    logs_p = os.path.abspath(os.path.join(cwd, logs))
-    blasts_p = os.path.abspath(os.path.join(cwd, blasts))
-    clusters_p = os.path.abspath(os.path.join(cwd, clusters))
-    metadata_p = os.path.abspath(os.path.join(cwd, metadata))
+    samples_p = resolve_config_path(samples, project_root)
+    runs_root_p = resolve_config_path(runs, project_root)
+    references_p = resolve_config_path(references, project_root)
+    reports_p = resolve_config_path(reports, project_root)
+    logs_p = resolve_config_path(logs, project_root)
+    blasts_p = resolve_config_path(blasts, project_root)
+    clusters_p = resolve_config_path(clusters, project_root)
+    metadata_p = resolve_config_path(metadata, project_root)
 
     max_len = int(config["Sequence_Size"]["max"]) if args.max_length is None else args.max_length
     min_len = int(config["Sequence_Size"]["min"]) if args.min_length is None else args.min_length

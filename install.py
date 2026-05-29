@@ -183,11 +183,23 @@ if __name__ == '__main__':
     #check metadata and references files
     metadata=config['Filenames']['metadata']
     references=config['Filenames']['ref_db']
+    geo_json=config['Filenames']['geo']
+    taxa_json=config['Filenames']['taxa']
     if not os.path.exists(metadata):
         print(f'Error: {metadata} not found.')
         sys.exit(1)
     else:
         shutil.move(metadata,os.path.join(config['Paths']['metadata'],metadata))
+    for filename in [geo_json, taxa_json]:
+        metadata_target = os.path.join(config['Paths']['metadata'], filename)
+        if os.path.exists(filename):
+            shutil.move(filename, metadata_target)
+            continue
+        if os.path.exists(metadata_target):
+            print(f'{filename} already exists in metadata. Skipping move.')
+            continue
+        print(f'Error: {filename} not found.')
+        sys.exit(1)
     if not os.path.exists(references):
         with open(references,'a') as f:
             os.utime(references,None)

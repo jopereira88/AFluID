@@ -292,18 +292,24 @@ def concat_fasta(flist: list[str],outname: str) -> None:
     -------
     None
     """
-    seqs={}
+    records=[]
     for i in flist:
         with open(i,'r') as file:
             fasta=file.readlines()
-            for i in range(len(fasta)):
-                if '>' in fasta[i]:
-                    name=fasta[i].strip()
-                    seqs[name]=''
+            name=''
+            seq_lines=[]
+            for line in fasta:
+                if line.startswith('>'):
+                    if name:
+                        records.append((name, ''.join(seq_lines).upper()))
+                    name=line.strip()
+                    seq_lines=[]
                 else:
-                    seqs[name]+=fasta[i].strip().upper()
+                    seq_lines.append(line.strip())
+            if name:
+                records.append((name, ''.join(seq_lines).upper()))
     with open(f'{outname}.fasta','w') as output:
-        for key, value in seqs.items():
+        for key, value in records:
             output.write(f'{key}\n{value}\n')
 
 def dict_to_fasta(seqs: dict[str, str],outname:str) -> None:

@@ -144,6 +144,61 @@ This pipeline comprises several steps:
 The following diagram illustrates the pipeline workflow:
 [Pipeline workflow (light)](Diagrama_pipeline.drawio.png) or [Pipeline workflow (dark)](Diagrama_pipeline.drawio.dark.png)
 
+## Mutations of interest
+The pipeline parses and reports the following mutations of interest. This reference table is derived from the current hard-coded mutation set in `structures.py`, specifically `muts_interest` and `muts_loci_meaning`.
+
+| Segment/Locus | Mutation | Biological effect |
+| --- | --- | --- |
+| PB2 | 9N | Observed in domestic poultry, Uganda; increased virulence in mice |
+| PB2 | 199S | Increased virulence in mice |
+| PB2 | 271A | Increase polymerase activity in the presence of avian acidic nuclear phosphoprotein 32 (ANP32) proteins; increase mortality and airborne transmission in ferrets; increased polymerase activity in avian and mammalian cell line |
+| PB2 | 292V | Observed in H3N8 samples from humans and birds; increased polymerase activity in a mammalian cell line, increased virulence in mice |
+| PB2 | 526R | Increased polymerase activity in mammalian cell line and virulence in mice |
+| PB2 | 588I | Enhances 2009 H1N1 pandemic influenza virus virulence by increasing viral replication and exacerbating PB2 inhibition of beta-interferon expression |
+| PB2 | 588V | Increased polymerase activity and replication in mammalian and avian cell lines, increased virulence in mice |
+| PB2 | 591K | Increased polymerase activity in mammalian and avian cell line, increased replication in a mammalian cell line, increased virulence in mice; observed in human isolates |
+| PB2 | 591R | Enhanced mammalian ANP32 adaptation (non-biased) |
+| PB2 | 627K | Observed in human isolate; increased polymerase activity and replication in mammalian cell line, increased virulence in mice and ferrets; contributes to airborne transmission of influenza A viruses (IAVs) in ferrets and contact transmission in guinea pigs; mammalian ANP32-specific adaptation (ANP32B biased) |
+| PB2 | 627V | Observed in human isolate; mammalian ANP32-specific adaptation (ANP32B biased); observed in human samples in Shenzhen; increased polymerase activity and replication in mammalian cell lines, increased virulence in mice |
+| PB2 | 631L | Most dominant mutation in mouse-adapted virus that strongly upregulated viral polymerase activity and played a critical role in the enhancement of virus replication and disease severity in mice; observed in dairy cattle USA 2024 |
+| PB2 | 701N | Increased polymerase activity, enhanced replication efficiency, increased virulence and contact transmission in guinea pigs; increased polymerase activity in mammalian cell line; increased viral replication and virulence in mice; mammalian ANP32-specific adaptation (non-biased); observed in seals |
+| PB2 | 702N | Observed in human isolate; increased polymerase activity in human and avian cells |
+| PB2 | 740N | Increase polymerase activity in the presence of avian ANP32 proteins, in human and avian cells |
+| PB1-F2 | 66S | Increased virulence, replication efficiency and antiviral response in mice |
+| PA | 38T | Resistance to antivirals: Baloxavir Marboxil |
+| PA | 85I | Enables guanine-rich sequence binding factor (GRSF1) to enhance the cytosolic accumulation and translation of a subset of viral mRNAs; enhanced replication in human A549 cells |
+| PA | 97I | Increased polymerase activity in mammalian cell line and enhanced replication and virulence in mice; increased polymerase activity in mammalian |
+| PA | 186S | Enables GRSF1 to enhance the cytosolic accumulation and translation of a subset of viral mRNAs |
+| PA | 336M | Significantly enhanced pathogenicity in a mouse model |
+| PA | 356R | Human host marker; Increase polymerase activity and enhanced replication in a mammalian cell line, increased virulence in mice |
+| PA | 552S | Enhanced viral RNA-dependent RNA polymerase (vRdRp) activity and viral replication in vitro |
+| HA | 156A | Increased virus binding to α2,6, increased transmission in guinea pigs |
+| HA | 156V | Observed in seal samples; decreased virulence in mice and increased affinity for the human-type receptor |
+| HA | 186D | In combination with HA:221D; Switch in the receptor specificity from avian-type to human-type receptor |
+| HA | 186V | Enhances binding affinity to mammalian cells and replication in mammalian cells; enhanced replication in mice |
+| HA | 208T | Increased the viral replication in avian and mammalian cells; enhance viral replication in mice |
+| HA | 221D | Increased virus binding to α2,6 |
+| HA | 222L | Increased virus binding to α2,6; transmitted via aerosol among guinea pigs; enhanced replication in mammalian cells and ferrets, enhanced contact transmission in ferrets; Loss of binding to α2,3; Increased acid and thermal stability |
+| HA | 224S | Increased binding to α2,6; increased viral replication in mammalian cells and virulence in mice; observed in human isolate; increase in the ability of the virus to infect mammals; decreased virus binding to α2,3 |
+| NP | 52H | Role in Butyrophilin Subfamily 3 Member A3 (BTN3A3) evasion |
+| NP | 52N | Significant mutation observed also in H5N1; role in BTN3A3 evasion |
+| NP | 100I | Resistance against Myxovirus resistance protein A (MxA) |
+| NP | 100V | Resistance against Myxovirus resistance protein A (MxA) |
+| NP | 283P | Resistance against Myxovirus resistance protein A (MxA) |
+| NP | 313V | Role in Butyrophilin Subfamily 3 Member A3 (BTN3A3) evasion |
+| NP | 313Y | Role in Butyrophilin Subfamily 3 Member A3 (BTN3A3) evasion |
+| NA | 119V | Resistance to antivirals: Zanamivir |
+| NA | 223V | Resistance to antivirals: Laninamivir |
+| NA | 275Y | Resistance to antivirals: Oseltamivir and Peramivir |
+| NA | 292K | Resistance to antivirals: Zanamivir |
+| NA | 399R | Mutation of 2SBS that are detrimental to the cleavage of sialosides linked to fetuin or transferrin; observed in seals |
+| NA | 432E | Decreased cleavage of fetuin-containing α2,3-linked sialic acids (SIAs) but not that of monovalent substrates or of transferrin containing only α2,6-linked SIAs |
+| M1 | 95K | Resistant to TRIM21, increases replication and pathogenicity in mice |
+| M2 | 27A | Increased resistance to adamantanes |
+| M2 | 31N | Increased resistance to adamantanes |
+
+If `muts_interest` or `muts_loci_meaning` changes in `structures.py`, this table should be updated to stay aligned with the mutations currently parsed by AFluID.
+
 ## Update
 The user can and should update AFluID to better represent the genomic diversity of the current flu season or the new circulating variants of non-seasonal Influenza A.
 The update can be made using the update.py module. `update.py` is a maintenance command and must be run from the project root.

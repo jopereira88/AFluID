@@ -5,9 +5,10 @@ import unittest
 from copy import deepcopy
 from unittest import mock
 
+from flu_utils import concat_fasta
 from install import _load_cluster_metadata_rows
-from main import _normalize_collection_date as normalize_main_collection_date
-from main import _unpack_cluster_payload, bclust, redirector
+from main import _FLUMUT_BATCH_SEPARATOR, _format_mutations_of_interest, _normalize_collection_date as normalize_main_collection_date
+from main import _unpack_cluster_payload, bclust, conform_to_flumut, redirector, run_flumut
 from final_report_utils import _normalize_collection_date as normalize_html_collection_date
 from structures import flagdict
 
@@ -87,6 +88,25 @@ class MainCollectionDateCompatibilityTests(unittest.TestCase):
         self.assertEqual(normalize_main_collection_date("   "), "Unknown")
         self.assertEqual(normalize_main_collection_date(None), "Unknown")
 
+    def test_format_mutations_of_interest_uses_requested_locus_order(self):
+        flags = {
+            'Sample': {
+                'PB2_muts': ['627K'],
+                'PB1_muts': ['66S', '13P'],
+                'PA_muts': ['127V'],
+                'HA_muts': ['156A'],
+                'NP_muts': ['105V'],
+                'NA_muts': ['275Y'],
+                'MP_muts': ['31N', '95K'],
+                'NS_muts': [],
+            }
+        }
+
+        self.assertEqual(
+            _format_mutations_of_interest(flags),
+            'PB2:627K;PB1:13P;PB1-F2:66S;PA:127V;HA:156A;NP:105V;NA:275Y;M1:95K;M2:31N',
+        )
+
     def test_bclust_accepts_legacy_cluster_metadata_without_collection_date(self):
         flags = deepcopy(flagdict)
         flags["BLAST"]["Sequences unassigned against cluster representatives"] = []
@@ -130,6 +150,85 @@ class MainCollectionDateCompatibilityTests(unittest.TestCase):
         mocked_run.assert_called_once()
         self.assertEqual(result["Seq_1"][2].strip(), ">Cluster 1")
         self.assertEqual(result["Seq_1"][7], "Unknown")
+
+    def test_conform_to_flumut_default_headers_remain_unchanged(self):
+        flags = {
+            'Sample': {'HA': ['>Seq_1']},
+            'Final Report': {'Sequences for FluMut': ['>Seq_1']},
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, 'format_sample.fasta'), 'w', encoding='utf-8') as handle:
+                handle.write('>Seq_1\nATGC\n')
+
+            output_fp = conform_to_flumut(flags, tmpdir, 'sample')
+
+            with open(output_fp, 'r', encoding='utf-8') as handle:
+                content = handle.read()
+
+        self.assertIn('>Seq_1_HA\nATGC\n', content)
+
+    def test_conform_to_flumut_can_export_original_headers_for_batch_regex(self):
+        flags = {
+            'Sample': {'HA': ['>Seq_1']},
+            'Final Report': {'Sequences for FluMut': ['>Seq_1']},
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, 'format_sample.fasta'), 'w', encoding='utf-8') as handle:
+                handle.write('>Seq_1\nATGC\n')
+
+            output_fp = conform_to_flumut(
+                flags,
+                tmpdir,
+                'sample',
+                mappings={'>Seq_1': '>orig_header_with_underscores'},
+                separator=_FLUMUT_BATCH_SEPARATOR,
+                use_original_headers=True,
+                output_suffix='to_flumut_batch',
+            )
+
+            with open(output_fp, 'r', encoding='utf-8') as handle:
+                content = handle.read()
+
+        self.assertIn(f'>orig_header_with_underscores{_FLUMUT_BATCH_SEPARATOR}HA\nATGC\n', content)
+
+    def test_concat_fasta_preserves_duplicate_headers_across_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fasta_a = os.path.join(tmpdir, 'a.fasta')
+            fasta_b = os.path.join(tmpdir, 'b.fasta')
+            output_base = os.path.join(tmpdir, 'merged')
+            duplicate_header = f'>orig{_FLUMUT_BATCH_SEPARATOR}HA'
+
+            with open(fasta_a, 'w', encoding='utf-8') as handle:
+                handle.write(f'{duplicate_header}\nAAAA\n')
+            with open(fasta_b, 'w', encoding='utf-8') as handle:
+                handle.write(f'{duplicate_header}\nTTTT\n')
+
+            concat_fasta([fasta_a, fasta_b], output_base)
+
+            with open(f'{output_base}.fasta', 'r', encoding='utf-8') as handle:
+                content = handle.read()
+
+        self.assertEqual(content.count(duplicate_header), 2)
+        self.assertIn(f'{duplicate_header}\nAAAA\n', content)
+        self.assertIn(f'{duplicate_header}\nTTTT\n', content)
+
+    def test_run_flumut_accepts_batch_regex_override(self):
+        with mock.patch('main._run_command') as mocked_run:
+            run_flumut(
+                reports_p='/tmp/reports',
+                samples_p='/tmp/samples',
+                file_tag='batch',
+                regex=f'(.+){_FLUMUT_BATCH_SEPARATOR}(.+)',
+                excel_output='/tmp/reports/batch_flumut.xlsx',
+                write_tsv_outputs=False,
+                input_fasta='/tmp/reports/batch_to_flumut.fasta',
+            )
+
+        command = mocked_run.call_args.args[0]
+        self.assertIn(f'(.+){_FLUMUT_BATCH_SEPARATOR}(.+)', command)
+        self.assertIn('/tmp/reports/batch_flumut.xlsx', command)
 
 
 class FinalReportCollectionDateCompatibilityTests(unittest.TestCase):

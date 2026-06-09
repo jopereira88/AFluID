@@ -29,6 +29,7 @@ from final_report_utils import (
     export_id_report_rollup,
     generate_final_report,
     maybe_create_batch_artifacts,
+    order_mutation_labels,
 )
 from copy import deepcopy
 import pandas as pd
@@ -47,6 +48,8 @@ _BATCH_SUMMARY_FIELDS = [
     'genin2_pb2', 'genin2_pb1', 'genin2_pa', 'genin2_np', 'genin2_na', 'genin2_mp', 'genin2_ns',
     'mutations_of_interest',
 ]
+
+_FLUMUT_BATCH_SEPARATOR = '__SEP__'
 
 
 def _set_tool_status(flags: dict, tool: str, status: str, detail: str = '') -> None:
@@ -1225,7 +1228,15 @@ def update_flumut_db(tool_versions: Optional[dict[str, str]] = None, capture_too
         capture_tool_versions=capture_tool_versions,
     )
 
-def conform_to_flumut(flagdict: dict, sample_path: str, file_tag: str) -> None:
+def conform_to_flumut(
+    flagdict: dict,
+    sample_path: str,
+    file_tag: str,
+    mappings: Optional[dict[str, str]] = None,
+    separator: str = '_',
+    use_original_headers: bool = False,
+    output_suffix: str = 'to_flumut',
+) -> str:
     """
     Write a FluMut-ready FASTA containing only selected sequences.
 
@@ -1241,7 +1252,8 @@ def conform_to_flumut(flagdict: dict, sample_path: str, file_tag: str) -> None:
 
     Returns
     -------
-    None
+    str
+        Output FASTA path.
 
     Notes
     -----
@@ -1256,10 +1268,38 @@ def conform_to_flumut(flagdict: dict, sample_path: str, file_tag: str) -> None:
                     seq_seg[i] = key
     flt_fasta = seq_get(os.path.join(sample_path, f'format_{file_tag}.fasta'))
     outdict = {}
+    used_headers = set()
+
+    if mappings is None:
+        mappings = {}
+
     for key in flt_fasta:
         if key in seq_seg:
-            outdict[f'{key}_{seq_seg[key]}'] = flt_fasta[key]
-    dict_to_fasta(outdict, os.path.join(sample_path, f'{file_tag}_to_flumut'))
+            segment = seq_seg[key]
+            header_base = key
+            if use_original_headers:
+                header_base = str(mappings.get(key, key)).strip()
+                if header_base.startswith('>'):
+                    header_base = header_base[1:]
+                if not header_base:
+                    header_base = key.lstrip('>')
+
+            output_header = f'>{header_base}{separator}{segment}'
+            if output_header in used_headers:
+                duplicate_index = 2
+                while True:
+                    candidate = f'>{header_base}__DUP{duplicate_index}{separator}{segment}'
+                    if candidate not in used_headers:
+                        output_header = candidate
+                        break
+                    duplicate_index += 1
+
+            used_headers.add(output_header)
+            outdict[output_header] = flt_fasta[key]
+
+    output_base = os.path.join(sample_path, f'{file_tag}_{output_suffix}')
+    dict_to_fasta(outdict, output_base)
+    return f'{output_base}.fasta'
 
 def conform_to_genin(flagdict: dict, mappings: dict[str, str], sample_path: str, file_tag: str) -> None:
     """
@@ -2064,6 +2104,7 @@ def run_batch_pipeline(
     failures = []
     results = []
     successful_flumut_fastas = []
+    successful_batch_flumut_fastas = []
     batch_tool_versions = {}
     batch_flumut_error = ''
 
@@ -2145,6 +2186,9 @@ def run_batch_pipeline(
             flumut_input_fp = str(result.get('flumut_input_fp', '')).strip()
             if flumut_input_fp:
                 successful_flumut_fastas.append(flumut_input_fp)
+            batch_flumut_input_fp = str(result.get('batch_flumut_input_fp', '')).strip()
+            if batch_flumut_input_fp:
+                successful_batch_flumut_fastas.append(batch_flumut_input_fp)
 
         except Exception as e:
             print(f"ERROR processing {fasta_file}: {e}")
@@ -2181,17 +2225,18 @@ def run_batch_pipeline(
 
     print(f"\nBatch summary written to: {batch_summary_fp}")
 
-    if successful_flumut_fastas:
+    if successful_batch_flumut_fastas:
         batch_fasta_base = os.path.join(batch_artifact_root, f'{batch_name}_to_flumut_batch_tmp')
         batch_fasta_fp = f'{batch_fasta_base}.fasta'
         batch_excel_fp = os.path.join(batch_artifact_root, f'{batch_name}_flumut.xlsx')
 
         try:
-            concat_fasta(successful_flumut_fastas, batch_fasta_base)
+            concat_fasta(successful_batch_flumut_fastas, batch_fasta_base)
             run_flumut(
                 reports_p=batch_artifact_root,
                 samples_p=runs_p,
                 file_tag=batch_name,
+                regex=f'(.+){_FLUMUT_BATCH_SEPARATOR}(.+)',
                 excel_output=batch_excel_fp,
                 write_tsv_outputs=False,
                 input_fasta=batch_fasta_fp,
@@ -2341,17 +2386,14 @@ def _normalize_genin_summary(genin_rows: Any) -> dict[str, str]:
 def _format_mutations_of_interest(flags: dict) -> str:
     """Aggregate all tracked mutations of interest into one semicolon-separated field."""
     mutations = []
-    seen = set()
     for segment in ('HA', 'NA', 'PA', 'PB1', 'PB2', 'MP', 'NP', 'NS'):
         for mut in flags.get('Sample', {}).get(f'{segment}_muts', []):
             mut = str(mut).strip()
             if not mut:
                 continue
             label = muts_loci_meaning.get(mut, (f'{segment}:{mut}', ''))[0]
-            if label not in seen:
-                seen.add(label)
-                mutations.append(label)
-    return ';'.join(sorted(mutations))
+            mutations.append(label)
+    return ';'.join(order_mutation_labels(mutations))
 
 
 def extract_batch_summary_fields(flags: dict) -> dict[str, str]:
@@ -2972,6 +3014,7 @@ def run_pipeline_for_file(
 
     _set_tool_status(flags, 'flumut', 'skipped', 'FluMut routing not enabled for this sample')
     flumut_input_fp = os.path.join(runs_p, f'{output_tag}_to_flumut.fasta')
+    batch_flumut_input_fp = ''
     if flags['Master']['flumut']:
         try:
             markers_fp = os.path.join(active_reports_p, f'{output_tag}_markers.tsv')
@@ -2979,6 +3022,17 @@ def run_pipeline_for_file(
             excel_output_fp = None if batch else os.path.join(active_reports_p, f'{output_tag}_flumut.xlsx')
             conform_to_flumut(flags, runs_p, output_tag)
             _require_files([flumut_input_fp], 'FluMut preparation did not produce the expected input FASTA')
+            if batch:
+                batch_flumut_input_fp = conform_to_flumut(
+                    flags,
+                    runs_p,
+                    output_tag,
+                    mappings=mappings,
+                    separator=_FLUMUT_BATCH_SEPARATOR,
+                    use_original_headers=True,
+                    output_suffix='to_flumut_batch',
+                )
+                _require_files([batch_flumut_input_fp], 'Batch FluMut preparation did not produce the expected input FASTA')
             if update_flumut.upper() == 'ON':
                 update_flumut_db(tool_versions=tool_versions, capture_tool_versions=capture_tool_versions)
             run_flumut(
@@ -3131,6 +3185,7 @@ def run_pipeline_for_file(
         'output_tag': output_tag,
         'mode': mode,
         'flumut_input_fp': flumut_input_fp if flags['Tool Status'].get('flumut', {}).get('status') == 'completed' else '',
+        'batch_flumut_input_fp': batch_flumut_input_fp if flags['Tool Status'].get('flumut', {}).get('status') == 'completed' else '',
     }
 def main(flagdict: dict = flagdict) -> None:
     """Main entry point for the pipeline."""

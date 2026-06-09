@@ -5,9 +5,11 @@ import unittest
 from final_report_utils import (
     apply_tool_version_placeholder,
     create_batch_index,
+    create_flumut_table_multi,
     create_sample_table,
     create_segment_background_table,
     create_segment_background_table_multi,
+    create_segment_mutations_table,
     html_skeleton,
     html_skeleton_multi,
 )
@@ -218,6 +220,91 @@ class HtmlReportTests(unittest.TestCase):
 
         self.assertIn('<div>2.16.0+|Unknown</div>', updated)
 
+    def test_segment_mutations_table_uses_requested_locus_order(self):
+        flags = {
+            'Sample': {
+                'PB2_muts': ['627K'],
+                'PB1_muts': ['13P', '66S'],
+                'PA_muts': ['38M', '127V'],
+                'HA_muts': ['156A'],
+                'NP_muts': ['105V'],
+                'NA_muts': ['275Y'],
+                'MP_muts': ['31N', '95K'],
+                'NS_muts': [],
+            }
+        }
+        lookup = {
+            '627K': ('PB2:627K', ''),
+            '13P': ('PB1:13P', ''),
+            '66S': ('PB1-F2:66S', ''),
+            '38M': ('PA:38M', ''),
+            '127V': ('PA-X:127V', ''),
+            '156A': ('HA:156A', ''),
+            '105V': ('NP:105V', ''),
+            '275Y': ('NA:275Y', ''),
+            '95K': ('M1:95K', ''),
+            '31N': ('M2:31N', ''),
+        }
+
+        html = create_segment_mutations_table(flags, lookup)
+
+        ordered_labels = [
+            'PB2:627K',
+            'PB1:13P',
+            'PB1-F2:66S',
+            'PA:38M',
+            'PA-X:127V',
+            'HA:156A',
+            'NP:105V',
+            'NA:275Y',
+            'M1:95K',
+            'M2:31N',
+        ]
+        positions = [html.find(f'<td>{label}</td>') for label in ordered_labels]
+        self.assertTrue(all(position >= 0 for position in positions))
+        self.assertEqual(positions, sorted(positions))
+
+    def test_flumut_multi_table_groups_by_sample_then_requested_locus_order(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            markers_fp = os.path.join(tmpdir, 'batch_markers.tsv')
+            with open(markers_fp, 'w', encoding='utf-8') as handle:
+                handle.write('Sample\tMutations in your sample\n')
+                handle.write('sample_b\tM2:A31N\n')
+                handle.write('sample_a\tM1:T95K\n')
+                handle.write('sample_a\tPB1-F2:N66S\n')
+                handle.write('sample_a\tPB2:E627K\n')
+                handle.write('sample_b\tPB1:I13P\n')
+
+            html = create_flumut_table_multi(
+                reports_p=tmpdir,
+                file_tag='batch',
+                muts_interest={
+                    'PB2': ['627K'],
+                    'PB1': ['13P', '66S'],
+                    'MP': ['95K', '31N'],
+                },
+                muts_loci_meaning={
+                    '627K': ('PB2:627K', ''),
+                    '13P': ('PB1:13P', ''),
+                    '66S': ('PB1-F2:66S', ''),
+                    '95K': ('M1:95K', ''),
+                    '31N': ('M2:31N', ''),
+                },
+            )
+
+            sample_a_pb2 = html.find('<td>sample_a</td>')
+            sample_a_pb1f2 = html.find('<td>PB1-F2</td>')
+            sample_a_m1 = html.find('<td>M1</td>')
+            sample_b = html.find('<td>sample_b</td>')
+            sample_b_pb1 = html.find('<td>PB1</td>', sample_b)
+            sample_b_m2 = html.find('<td>M2</td>', sample_b)
+
+            self.assertTrue(all(position >= 0 for position in (sample_a_pb2, sample_a_pb1f2, sample_a_m1, sample_b, sample_b_pb1, sample_b_m2)))
+            self.assertLess(sample_a_pb2, sample_a_pb1f2)
+            self.assertLess(sample_a_pb1f2, sample_a_m1)
+            self.assertLess(sample_a_m1, sample_b)
+            self.assertLess(sample_b_pb1, sample_b_m2)
+
     def test_single_sample_skeleton_uses_supported_tool_version_tags(self):
         self.assertIn('<!--TOOL_VERSION_BLASTN-->', html_skeleton)
         self.assertIn('<!--TOOL_VERSION_NEXTCLADE-->', html_skeleton)
@@ -235,6 +322,13 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn('<!--TOOL_VERSION_NEXTCLADE-->', html_skeleton_multi)
         self.assertIn('<!--TOOL_VERSION_FLUMUT-->', html_skeleton_multi)
         self.assertIn('<!--TOOL_VERSION_FLUMUTDB-->', html_skeleton_multi)
+
+    def test_flumut_sections_link_to_github_repository_in_new_tab(self):
+        for html in (html_skeleton, html_skeleton_multi):
+            self.assertIn('https://github.com/jopereira88/AFluID', html)
+            self.assertIn('AFluID GitHub repository', html)
+            self.assertIn('target="_blank"', html)
+            self.assertIn('rel="noopener noreferrer"', html)
 
     def test_genin2_panel_text_uses_version_tag_in_single_and_multi_renderers(self):
         single_html = html_skeleton

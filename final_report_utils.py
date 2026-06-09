@@ -998,6 +998,12 @@ def _html_link(href: str, label: str) -> str:
     )
 
 
+_GITHUB_REPOSITORY_LINK = _html_link(
+    'https://github.com/jopereira88/AFluID',
+    'AFluID GitHub repository',
+)
+
+
 def _representative_link(accession: Any) -> str:
     """Render a representative accession as an NCBI Nuccore link."""
     accession_text = str(accession).strip()
@@ -1013,6 +1019,52 @@ def _segment_sort_key(segment_name: Any) -> tuple[int, str]:
     """Return a stable sort key for canonical IAV segment ordering."""
     segment_text = str(segment_name).strip()
     return (segment_to_number_iav.get(segment_text, 999), segment_text)
+
+
+_MUTATION_LOCUS_ORDER = (
+    'PB2',
+    'PB1',
+    'PB1-F2',
+    'PA',
+    'PA-X',
+    'HA',
+    'NP',
+    'NA',
+    'M1',
+    'M2',
+)
+
+
+def _mutation_locus_sort_key(locus_name: Any) -> tuple[int, str]:
+    """Return a stable sort key for report mutation loci."""
+    locus_text = str(locus_name).strip()
+    try:
+        order_idx = _MUTATION_LOCUS_ORDER.index(locus_text)
+    except ValueError:
+        order_idx = len(_MUTATION_LOCUS_ORDER)
+    return (order_idx, locus_text)
+
+
+def _mutation_label_sort_key(label: Any) -> tuple[tuple[int, str], str]:
+    """Sort mutation display labels by locus first, then full label."""
+    label_text = str(label).strip()
+    locus_text = label_text.split(':', 1)[0] if ':' in label_text else label_text
+    return (_mutation_locus_sort_key(locus_text), label_text)
+
+
+def order_mutation_labels(labels: Iterable[Any]) -> list[str]:
+    """Return unique mutation display labels in report order."""
+    cleaned = []
+    seen = set()
+
+    for label in labels:
+        label_text = str(label).strip()
+        if not label_text or label_text in seen:
+            continue
+        seen.add(label_text)
+        cleaned.append(label_text)
+
+    return sorted(cleaned, key=_mutation_label_sort_key)
 
 
 def _display_mutation_label(segment: str, mutation: str, mut_lookup: dict[str, tuple[str, str]]) -> str:
@@ -1767,7 +1819,7 @@ def create_segment_mutations_table(flags: dict, muts_loci_meaning: dict) -> str:
     </thead>
     <tbody>"""
 
-    for mut in muts:
+    for mut in order_mutation_labels(muts):
         meaning = muts[mut]
         table += f"""
         <tr>
@@ -2054,9 +2106,10 @@ html_skeleton = r"""<!DOCTYPE html>
           <h2>Segment Mutations</h2>
           <p class="muted">
             Obtained using FluMut (<!--TOOL_VERSION_FLUMUT-->) running FluMutDB (<!--TOOL_VERSION_FLUMUTDB-->).
-            These mutations were further filtered for mutations of importance as cited by Alvarez et al. 2025
-            and Mohaptra et al. 2023. For a list of all mutations found, please refer to the final FluMut
-            spreadsheet report.
+            These mutations were further filtered for mutations of importance as cited by Alvarez et al. 2025 - 34 key
+            mutations and 6 mutations of secondary importance - and Mohaptra et al. 2023 - for all antiviral resistance related mutations. 
+            For a list of all mutations found, please refer to the final FluMut spreadsheet report.
+            For a list of the mutations of interest parsed in this pipeline, please refer to the """ + _GITHUB_REPOSITORY_LINK + r""".
           </p>
           <!--SEGMENT_MUTATIONS_TABLE-->
         </article>
@@ -2458,9 +2511,11 @@ html_skeleton_multi = r"""
         <article id="panel3" class="tab-panel">
           <h2>FluMut</h2>
           <p class="muted">
-            Markers of interest detected by FluMut (<!--TOOL_VERSION_FLUMUT-->) using
-            FluMutDB (<!--TOOL_VERSION_FLUMUTDB-->). Only mutations present in the curated
-            dictionary of mutations of interest are reported.
+            Obtained using FluMut (<!--TOOL_VERSION_FLUMUT-->) running FluMutDB (<!--TOOL_VERSION_FLUMUTDB-->).
+            These mutations were further filtered for mutations of importance as cited by Alvarez et al. 2025 - 34 key
+            mutations and 6 mutations of secondary importance - and Mohaptra et al. 2023 - for all antiviral resistance related mutations. 
+            For a list of all mutations found, please refer to the final FluMut spreadsheet report.
+            For a list of the mutations of interest parsed in this pipeline, please refer to the """ + _GITHUB_REPOSITORY_LINK + r""".
           </p>
           <!--MULTI_FLUMUT_TABLE-->
         </article>
@@ -2951,6 +3006,7 @@ def create_flumut_table_multi(reports_p: str, file_tag: str, muts_interest: dict
 
         # Canonical segment for matching against muts_interest
         segment = loci_seg.get(locus_raw, locus_raw)
+        display_locus = locus_raw
 
         # Normalize mutation like mut_miner(): A123T -> 123T
         norm_mut = mut_raw
@@ -2974,7 +3030,7 @@ def create_flumut_table_multi(reports_p: str, file_tag: str, muts_interest: dict
 
         hits.append({
             "Sample": sample,
-            "Segment/Locus": segment,
+            "Segment/Locus": display_locus,
             "Mutation": norm_mut,
             "Biological effects": biological_effect
         })
@@ -2986,10 +3042,14 @@ def create_flumut_table_multi(reports_p: str, file_tag: str, muts_interest: dict
         </div>
         """
 
-    hits_df = pd.DataFrame(hits).drop_duplicates().sort_values(
-        by=["Sample", "Segment/Locus", "Mutation"],
+    hits_df = pd.DataFrame(hits).drop_duplicates()
+    hits_df['__sample_sort'] = hits_df['Sample'].astype(str)
+    hits_df['__locus_sort'] = hits_df['Segment/Locus'].map(_mutation_locus_sort_key)
+    hits_df['__mutation_sort'] = hits_df['Mutation'].astype(str)
+    hits_df = hits_df.sort_values(
+        by=["__sample_sort", "__locus_sort", "__mutation_sort"],
         kind="stable"
-    )
+    ).drop(columns=['__sample_sort', '__locus_sort', '__mutation_sort'])
 
     table = """
     <div class="table-wrap">

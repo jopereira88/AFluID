@@ -2225,6 +2225,9 @@ def run_batch_pipeline(
 
     print(f"\nBatch summary written to: {batch_summary_fp}")
 
+    batch_cluster_composition_name = f'{batch_name}_cluster_composition.tsv'
+    batch_extra_files = [batch_cluster_composition_name]
+
     if successful_batch_flumut_fastas:
         batch_fasta_base = os.path.join(batch_artifact_root, f'{batch_name}_to_flumut_batch_tmp')
         batch_fasta_fp = f'{batch_fasta_base}.fasta'
@@ -2243,6 +2246,8 @@ def run_batch_pipeline(
                 tool_versions=batch_tool_versions,
                 capture_tool_versions=True,
             )
+            if os.path.isfile(batch_excel_fp):
+                batch_extra_files.append(os.path.basename(batch_excel_fp))
         except Exception as exc:
             batch_flumut_error = str(exc)
             print(f'Warning: batch-wide FluMut workbook generation failed: {exc}')
@@ -2255,7 +2260,6 @@ def run_batch_pipeline(
     if write_tool_versions_tsv and batch_tool_versions:
         _write_tool_versions_tsv(batch_artifact_root, batch_name, batch_tool_versions)
 
-    batch_cluster_composition_name = f'{batch_name}_cluster_composition.tsv'
     successful_id_report_fps = [
         os.path.join(
             batch_artifact_root,
@@ -2275,7 +2279,7 @@ def run_batch_pipeline(
     maybe_create_batch_artifacts(
         batch_artifact_root,
         batch_summary_fp,
-        extra_files=[batch_cluster_composition_name],
+        extra_files=batch_extra_files,
     )
 
     if failures or batch_flumut_error:

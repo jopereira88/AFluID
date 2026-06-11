@@ -1,10 +1,12 @@
 import os
 import tempfile
 import unittest
+import zipfile
 
 from final_report_utils import (
     apply_tool_version_placeholder,
     create_batch_index,
+    maybe_create_batch_artifacts,
     create_flumut_table_multi,
     create_sample_table,
     create_segment_background_table,
@@ -59,6 +61,46 @@ class HtmlReportTests(unittest.TestCase):
             self.assertIn('sample1_extra.tsv', html)
             self.assertIn('target="_blank"', html)
             self.assertIn('rel="noopener noreferrer"', html)
+
+    def test_batch_artifacts_zip_includes_batch_flumut_workbook(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = os.path.join(tmpdir, 'sample1')
+            os.mkdir(sample_dir)
+
+            with open(os.path.join(sample_dir, 'sample1_final_report.html'), 'w', encoding='utf-8') as handle:
+                handle.write('report')
+
+            batch_summary_name = 'batch_summary_batch_root_20260420_153012.tsv'
+            batch_summary_fp = os.path.join(tmpdir, batch_summary_name)
+            with open(batch_summary_fp, 'w', encoding='utf-8') as handle:
+                handle.write('input_file\tfile_tag\tstatus\terror\treports_dir_rel\n')
+                handle.write('sample1.fasta\tsample1\tok\t\tsample1\n')
+
+            workbook_name = 'batch_root_20260420_153012_flumut.xlsx'
+            with open(os.path.join(tmpdir, workbook_name), 'w', encoding='utf-8') as handle:
+                handle.write('xlsx')
+
+            cluster_name = 'batch_root_20260420_153012_cluster_composition.tsv'
+            with open(os.path.join(tmpdir, cluster_name), 'w', encoding='utf-8') as handle:
+                handle.write('cluster\n')
+
+            created = maybe_create_batch_artifacts(
+                tmpdir,
+                batch_summary_fp,
+                extra_files=[cluster_name, workbook_name],
+            )
+
+            self.assertTrue(created)
+
+            zip_fp = os.path.join(tmpdir, 'batch_reports_batch_root_20260420_153012.zip')
+            with zipfile.ZipFile(zip_fp, 'r') as archive:
+                names = set(archive.namelist())
+
+            self.assertIn('sample1/sample1_final_report.html', names)
+            self.assertIn(batch_summary_name, names)
+            self.assertIn('batch_index_batch_root_20260420_153012.html', names)
+            self.assertIn(cluster_name, names)
+            self.assertIn(workbook_name, names)
 
     def test_sample_table_uses_canonical_segment_order_and_locus_mutations(self):
         with tempfile.TemporaryDirectory() as tmpdir:

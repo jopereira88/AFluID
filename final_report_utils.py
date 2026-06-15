@@ -999,11 +999,17 @@ def _html_link(href: str, label: str) -> str:
 
 
 _GITHUB_REPOSITORY_LINK = _html_link(
-    'https://github.com/jopereira88/AFluID',
+    'https://github.com/jopereira88/AFluID#mutations-of-interest',
     'AFluID GitHub repository',
 )
-
-
+_ALVAREZ_DOI_LINK= _html_link(
+    'https://doi.org/10.2903/j.efsa.2025.9191',
+    'EFSA AHAW Panel (EFSA Panel on Animal Health and Animal Welfare)'
+)
+_MOHAPATRA_DOI_LINK= _html_link(
+    'https://doi.org/10.3390/ijms242012244',
+    'Evolution of Influenza Viruses—Drug Resistance, Treatment Options and Emerging Therapeutics'
+)
 def _representative_link(accession: Any) -> str:
     """Render a representative accession as an NCBI Nuccore link."""
     accession_text = str(accession).strip()
@@ -2106,8 +2112,10 @@ html_skeleton = r"""<!DOCTYPE html>
           <h2>Segment Mutations</h2>
           <p class="muted">
             Obtained using FluMut (<!--TOOL_VERSION_FLUMUT-->) running FluMutDB (<!--TOOL_VERSION_FLUMUTDB-->).
-            These mutations were further filtered for mutations of importance as cited by Alvarez et al. 2025 - 34 key
-            mutations and 6 mutations of secondary importance - and Mohaptra et al. 2023 - for all antiviral resistance related mutations. 
+            These mutations were further filtered for mutations of importance as defined by the EFSA AHAW Panel 
+            (EFSA Panel on Animal Health and Animal Welfare), ECDC, et al (2025) (""" + _ALVAREZ_DOI_LINK + r""") comprising 40 selected mutations associated 
+            with six distinct phenotypic traits, including 34 key mutations that may enhance adaptation to mammals, 
+            particularly humans, as well as antiviral resistance related mutations, as defined by Mohapatra et al.(2023) (""" + _MOHAPATRA_DOI_LINK + r""")
             For a list of all mutations found, please refer to the final FluMut spreadsheet report.
             For a list of the mutations of interest parsed in this pipeline, please refer to the """ + _GITHUB_REPOSITORY_LINK + r""".
           </p>
@@ -2512,8 +2520,10 @@ html_skeleton_multi = r"""
           <h2>FluMut</h2>
           <p class="muted">
             Obtained using FluMut (<!--TOOL_VERSION_FLUMUT-->) running FluMutDB (<!--TOOL_VERSION_FLUMUTDB-->).
-            These mutations were further filtered for mutations of importance as cited by Alvarez et al. 2025 - 34 key
-            mutations and 6 mutations of secondary importance - and Mohaptra et al. 2023 - for all antiviral resistance related mutations. 
+            These mutations were further filtered for mutations of importance as defined by the EFSA AHAW Panel 
+            (EFSA Panel on Animal Health and Animal Welfare), ECDC, et al (2025) (""" + _ALVAREZ_DOI_LINK + r""") comprising 40 selected mutations associated 
+            with six distinct phenotypic traits, including 34 key mutations that may enhance adaptation to mammals, 
+            particularly humans, as well as antiviral resistance related mutations, as defined by Mohapatra et al.(2023) (""" + _MOHAPATRA_DOI_LINK + r""")
             For a list of all mutations found, please refer to the final FluMut spreadsheet report.
             For a list of the mutations of interest parsed in this pipeline, please refer to the """ + _GITHUB_REPOSITORY_LINK + r""".
           </p>

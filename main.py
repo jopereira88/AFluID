@@ -43,7 +43,10 @@ _TOOL_VERSION_CACHE: dict[str, dict[str, str]] = {}
 
 _BATCH_SUMMARY_FIELDS = [
     'input_file', 'file_tag', 'status', 'error', 'sample_dir', 'reports_dir_rel',
-    'flumut_ran', 'nextclade_ran', 'genin2_ran', 'clade', 'genotype',
+    'flumut_ran', 'nextclade_ran', 'genin2_ran',
+    'pb2_cluster', 'pb1_cluster', 'pa_cluster', 'ha_cluster',
+    'np_cluster', 'na_cluster', 'mp_cluster', 'ns_cluster',
+    'clade', 'genotype',
     'genin2_genotype', 'genin2_subgenotype',
     'genin2_pb2', 'genin2_pb1', 'genin2_pa', 'genin2_np', 'genin2_na', 'genin2_mp', 'genin2_ns',
     'mutations_of_interest',
@@ -2214,6 +2217,20 @@ def run_batch_pipeline(
                 'genin2_ran': 'no',
             })
 
+    # Extract per-segment cluster names from each sample's ID_Report
+    for row in results:
+        if str(row.get('status', '')).strip().lower() == 'ok':
+            file_tag = str(row.get('file_tag', '')).strip()
+            reports_dir_rel = str(row.get('reports_dir_rel', '')).strip()
+            if file_tag and reports_dir_rel:
+                id_report_fp = os.path.join(
+                    batch_artifact_root,
+                    reports_dir_rel,
+                    f"{file_tag}_ID_Report.txt"
+                )
+                segment_clusters = extract_segment_clusters(id_report_fp)
+                row.update(segment_clusters)
+
     batch_summary_fp = os.path.join(batch_artifact_root, f"batch_summary_{batch_name}.tsv")
 
     with open(batch_summary_fp, 'w', encoding='utf-8', newline='') as out:
@@ -2400,6 +2417,32 @@ def _format_mutations_of_interest(flags: dict) -> str:
     return ';'.join(order_mutation_labels(mutations))
 
 
+def extract_segment_clusters(id_report_fp: str) -> dict[str, str]:
+    """Read ID_Report and return {segment_cluster: cluster_name} mapping."""
+    segment_fields = {f'{seg.lower()}_cluster': '' for seg in iav_segments}
+
+    if not os.path.exists(id_report_fp):
+        return segment_fields
+
+    try:
+        df = pd.read_table(id_report_fp, index_col=False)
+        df.columns = [c.upper().strip() for c in df.columns]
+
+        if 'SEGMENT' not in df.columns or 'CLUSTER' not in df.columns:
+            return segment_fields
+
+        for seg in iav_segments:
+            seg_rows = df[df['SEGMENT'] == seg]
+            if not seg_rows.empty:
+                clusters = seg_rows['CLUSTER'].dropna().astype(str).str.strip()
+                if not clusters.empty:
+                    segment_fields[f'{seg.lower()}_cluster'] = clusters.iloc[0]
+
+        return segment_fields
+    except Exception:
+        return segment_fields
+
+
 def extract_batch_summary_fields(flags: dict) -> dict[str, str]:
     """Build the enriched batch-summary fields from one sample's flags."""
     sample = flags.get('Sample', {})
@@ -2413,6 +2456,7 @@ def extract_batch_summary_fields(flags: dict) -> dict[str, str]:
     }
     summary.update(_normalize_genin_summary(sample.get('Genin_genotypes', [])))
     return summary
+
 
 
 def make_run_prefix(batch_dir: str = '', timestamp: str = '') -> str:

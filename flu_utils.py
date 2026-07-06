@@ -10,6 +10,21 @@ from typing import Any, Iterable, Optional
 from structures import segment_syns, iupac_nucleotides
 import pandas as pd
 
+
+def _header_suffix(index: int) -> str:
+    """Convert a zero-based duplicate index into A..Z, AA..ZZ suffixes."""
+    value = index + 1
+    suffix = ''
+    while value > 0:
+        value, remainder = divmod(value - 1, 26)
+        suffix = chr(ord('A') + remainder) + suffix
+    return suffix
+
+
+def _normalize_seq_header(header: str) -> str:
+    """Apply the legacy FASTA header normalization used by seq_get()."""
+    return header.strip().replace(';', '_')
+
 def strains_get(filename: str) -> list[str]:
     """
     Collect strain descriptors from a multi-FASTA file.
@@ -81,21 +96,35 @@ def seq_get(filename: str) -> dict[str, str]:
     Sequences are normalized by removing ``-``, replacing ``X`` with ``N``,
     converting ``U`` to ``T``, and replacing non-IUPAC characters with ``N``.
     """
-    seqs={}
+    records = []
+    counts = {}
     with open(filename,'r') as file:
         fasta=file.readlines()
+    name = None
     for i in range(len(fasta)):
         if '>' in fasta[i]:
-            name=fasta[i].strip()
-            name=name.replace(';','_')
-            seqs[name]=''
-        else:
-            seqs[name]+=fasta[i].strip().upper().replace('-','').replace('X','N')
-    for key in seqs:
-        seqs[key]=seqs[key].replace('U','T')
-        for nuc in seqs[key]:
+            name = _normalize_seq_header(fasta[i])
+            records.append([name, ''])
+            counts[name] = counts.get(name, 0) + 1
+        elif name is not None:
+            records[-1][1] += fasta[i].strip().upper().replace('-','').replace('X','N')
+
+    seqs = {}
+    seen = {}
+    for key, sequence in records:
+        sequence = sequence.replace('U','T')
+        for nuc in sequence:
             if nuc not in iupac_nucleotides:
-                seqs[key]=seqs[key].replace(nuc,'N')
+                sequence = sequence.replace(nuc,'N')
+
+        if counts[key] > 1:
+            seen[key] = seen.get(key, 0)
+            output_key = f'{key}_{_header_suffix(seen[key])}'
+            seen[key] += 1
+        else:
+            output_key = key
+
+        seqs[output_key] = sequence
     return seqs
 
 

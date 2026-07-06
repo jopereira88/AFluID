@@ -5,8 +5,9 @@ import unittest
 from copy import deepcopy
 from unittest import mock
 
-from flu_utils import concat_fasta
+from flu_utils import concat_fasta, seq_get
 from install import _load_cluster_metadata_rows
+
 from main import _FLUMUT_BATCH_SEPARATOR, _format_mutations_of_interest, _normalize_collection_date as normalize_main_collection_date
 from main import _unpack_cluster_payload, bclust, conform_to_flumut, redirector, run_flumut
 from final_report_utils import _normalize_collection_date as normalize_html_collection_date
@@ -225,10 +226,74 @@ class MainCollectionDateCompatibilityTests(unittest.TestCase):
                 write_tsv_outputs=False,
                 input_fasta='/tmp/reports/batch_to_flumut.fasta',
             )
-
         command = mocked_run.call_args.args[0]
         self.assertIn(f'(.+){_FLUMUT_BATCH_SEPARATOR}(.+)', command)
         self.assertIn('/tmp/reports/batch_flumut.xlsx', command)
+
+    def test_seq_get_handles_duplicates_with_suffixes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fasta_fp = os.path.join(tmpdir, 'test_dups.fasta')
+            with open(fasta_fp, 'w') as f:
+                f.write(">Header1\nATGC\n")
+                f.write(">Header2\nCCGG\n")
+                f.write(">Header1\nTTTT\n")
+                f.write(">Header1\nGGCC\n")
+                f.write(">Header3\nAAAA\n")
+            
+            res = seq_get(fasta_fp)
+            
+            # Unique stays unique
+            self.assertIn(">Header2", res)
+            self.assertIn(">Header3", res)
+            # Duplicates get suffixed starting at _A
+            self.assertIn(">Header1_A", res)
+            self.assertIn(">Header1_B", res)
+            self.assertIn(">Header1_C", res)
+            self.assertEqual(res[">Header1_A"], "ATGC")
+            self.assertEqual(res[">Header1_B"], "TTTT")
+            self.assertEqual(res[">Header1_C"], "GGCC")
+            self.assertEqual(len(res), 5)
+
+    def test_seq_get_handles_normalization_collisions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fasta_fp = os.path.join(tmpdir, 'test_norm.fasta')
+            with open(fasta_fp, 'w') as f:
+                # These should normalize to the same header '>Header_1'
+                f.write(">Header;1\nATGC\n")
+                f.write(">Header_1\nCCGG\n")
+            
+            res = seq_get(fasta_fp)
+            self.assertIn(">Header_1_A", res)
+            self.assertIn(">Header_1_B", res)
+            self.assertEqual(len(res), 2)
+
+    def test_fasta_preprocess_preserves_duplicates(self):
+        from main import fasta_preprocess, seq_enum
+        with tempfile.TemporaryDirectory() as tmpdir:
+            samples_p = tmpdir
+            runs_p = tmpdir
+            fasta_name = 'test.fasta'
+            with open(os.path.join(samples_p, fasta_name), 'w') as f:
+                f.write(">Header1\nATGC\n")
+                f.write(">Header1\nTTTT\n")
+            
+            flags = {}
+            # Run preprocess
+            header_mapping = fasta_preprocess(
+                filename=fasta_name,
+                samples_path=samples_p,
+                runs_path=runs_p,
+                file_tag='tag',
+                min_seq_len=1,
+                max_seq_len=1000,
+                flags=flags
+            )
+            
+            # Both sequences should be mapped to unique internal IDs
+            self.assertEqual(len(header_mapping), 2)
+            self.assertIn(">Header1_A", header_mapping.values())
+            self.assertIn(">Header1_B", header_mapping.values())
+
 
 
 class FinalReportCollectionDateCompatibilityTests(unittest.TestCase):

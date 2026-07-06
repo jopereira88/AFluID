@@ -413,7 +413,7 @@ iupac_nucleotides={'A':'A','C':'C','G':'G','T':'T','R':'AG','Y':'CT','S':'GC','W
 
 
 muts_interest={'HA': ['156A', '156V', '186D', '186V', '221D', '222L', '224S', '208T'],
- 'NA': ['399R', '432E', '275Y', '119V', '292K', '223V'],
+ 'NA': ['399R', '432E', '275Y', '119V', '292K','293K', '223V'],
  'PA': ['356R', '552S', '85I', '97I', '336M', '186S', '38T'],
  'PB1': ['66S'],
  'PB2': ['271A','292V','526R','588I','588V','591K','591R',
@@ -433,7 +433,8 @@ muts_loci_meaning={'156A':('HA:156A','Increased virus binding to α2,6, increase
                    '432E':('NA:432E','Decreased cleavage of fetuin-containing α2,3-linked sialic acids (SIAs) but not that of monovalent substrates or of transferrin containing only α2,6-linked SIAs'), 
                    '275Y':('NA:275Y','Resistance to antivirals: Oseltamivir and Peramivir'), 
                    '119V':('NA:119V','Resistance to antivirals: Zanamivir'), 
-                   '292K':('NA:292K','Resistance to antivirals: Zanamivir'), 
+                   '292K':('NA:292K','Resistance to antivirals: Zanamivir'),
+                   '293K':('NA:292K','Resistance to antivirals: Zanamivir'), 
                    '223V':('NA:223V','Resistance to antivirals: Laninamivir'),
                    '356R':('PA:356R','Human host marker; Increase polymerase activity and enhanced replication in a mammalian cell line, increased virulence in mice'), 
                    '552S':('PA:552S','Enhanced viral RNA-dependent RNA polymerase (vRdRp) activity and viral replication in vitro'), 

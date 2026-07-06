@@ -6,7 +6,7 @@ Pipeline for Influenza A virus segment and genotype identification though homolg
 ### Path policy
 - Run maintenance commands from the AFluID project root. This includes `install.py` and `update.py`.
 - The configuration file may be passed as either a relative or absolute path, but AFluID resolves it to an absolute path at startup and uses that absolute path for the rest of the run.
-- Paths defined under `[Paths]` in `config.ini` may be absolute or relative.
+- Paths defined under `[Paths]` in `config.ini` may be absolute or relative.    
 - Absolute paths under `[Paths]` are used as written.
 - Relative paths under `[Paths]` are resolved relative to the project root.
 - Maintenance input files required by `install.py` and `update.py` remain rooted at the project root.

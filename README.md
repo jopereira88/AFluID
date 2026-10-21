@@ -215,3 +215,8 @@ As with installation, the configuration file is normalized to an absolute path a
 Depending on the size of the sequence database the update can take a long while so it's recommended you use a screen if working on a shared server.
 
 Update validation reports are written to the dedicated path configured as ```update_reports``` under ```[Paths]``` in ```config.ini```, so update runs stay isolated from normal pipeline report outputs. Older configs that do not define ```update_reports``` fall back to ```update/reports``` automatically.
+
+
+**AFluID development has been supported by:**
+
+The European Union through the DURABLE “Research Network against Epidemics” project (https://durableproject.org/). DURABLE is co-funded by The European Commission Union under the EU4Health Programme (EU4H) [101102733]. However, views and opinions expressed are those of the authors only and do not necessarily reflect those of the European Union or the European Health and Digital Executive Agency. Neither the European Union nor the granting authority can be held responsible.

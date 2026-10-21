@@ -216,6 +216,7 @@ Depending on the size of the sequence database the update can take a long while 
 
 Update validation reports are written to the dedicated path configured as ```update_reports``` under ```[Paths]``` in ```config.ini```, so update runs stay isolated from normal pipeline report outputs. Older configs that do not define ```update_reports``` fall back to ```update/reports``` automatically.
 
+## Funding
 
 **AFluID development has been supported by:**
 

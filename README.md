@@ -72,8 +72,8 @@ The pipeline also runs 2 different modes and its behaviour can be altered by sev
     Single-sample is a sub-mode of consensus mode used for when a user has a fasta file with 1-8 sequences of one sample. This mode will allow for more quality checks on the final report. For multi-sample fasta files please turn this option off.
 * Turn off tools (*argument: -off/--turn_off (nextclade,getref,flumut)*):
     This argument allows the user to turn off specific tools thar could be turned on by default.
-* Remove previous (*argument: -rm/--remove_previous (on/off) - default:on*):
-    The pipline profuces intermediate outputs on the ```runs/``` and ```samples/``` paths. this will clear those files in the beginning of each run. If you are running batch or parallell analysis, turn off this feature.
+* Parallel run support (*argument: -p/--parallel*):
+    Skip the automatic cleanup of temporary files from the ```runs/``` directory at startup. Without this flag, AFluID deletes any pre-existing files and session directories from ```runs/``` before beginning a new run, making it impossible to run multiple pipeline instances concurrently. Use ```--parallel``` to allow simultaneous runs (e.g. multiple batch jobs) and to preserve intermediate output files for inspection after the run completes — even if you only need a single run's temporary files, ```-p``` keeps them in place.
 * Output directory (*argument: --outdir PATH*):
      Report outputs and exported reference files can be redirected to a custom root directory. Relative paths are resolved from the current working directory; absolute paths are accepted as-is.
 * Output name (*argument: -o/--output_name NAME*):

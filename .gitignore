@@ -24,3 +24,15 @@ missing_accessions.txt
 .DS_Store
 .vscode/
 .idea/
+# Local untracked files
+CHANGELOG_2026-05-28.md
+CHANGELOG_2026-07-22.md
+PT_A_H5N1_SAMPLE_01_cc_genin.tsv
+cluster_meta.py
+sequencesDnaInf_20260520.fasta
+session-ses_0e76.md
+session-ses_1920.md
+session-ses_1afa.md
+session-ses_1b5f.md
+session-ses_1ba0.md
+update/

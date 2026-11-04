@@ -1169,7 +1169,13 @@ def apply_tool_version_placeholder(
     return html_text.replace(placeholder_tag, replacement)
 
 
-def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: Optional[list[dict[str, str]]] = None, output_name: str = "batch_index.html") -> str:
+def create_batch_index(
+    reports_p: str,
+    ok_rows: list[dict[str, str]],
+    all_rows: Optional[list[dict[str, str]]] = None,
+    output_name: str = "batch_index.html",
+    batch_issues: Optional[list[tuple[str, str]]] = None,
+) -> str:
     """
     Create an HTML landing page for batch outputs.
 
@@ -1183,6 +1189,8 @@ def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: 
         Full batch manifest rows, including failures.
     output_name : str, default "batch_index.html"
         Filename for the generated HTML index.
+    batch_issues : list[tuple[str, str]], optional
+        Batch-level (not per-sample) failures as ``(step, error)`` pairs.
 
     Returns
     -------
@@ -1209,6 +1217,9 @@ def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: 
       .muted{color:#666}
       .missing{color:#999}
       .failed{color:#b91c1c}
+      .warning{color:#b45309;font-weight:600}
+      .tool-errors{color:#b45309}
+      .issues{margin-bottom:1.5rem}
       a{text-decoration:none}
       a:hover{text-decoration:underline}
       code{background:#f3f4f6;padding:.1rem .3rem;border-radius:.25rem}
@@ -1223,7 +1234,22 @@ def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: 
         total = len(all_rows)
         oks = len(ok_rows)
         fails = total - oks
-        html.append(f'<p class="muted">Samples in manifest: {total} | Successful: {oks} | Failed: {fails}</p>')
+        with_tool_errors = sum(
+            1 for r in all_rows
+            if str(r.get("status", "")).strip().lower() == "ok" and str(r.get("tool_errors", "")).strip()
+        )
+        html.append(
+            f'<p class="muted">Samples in manifest: {total} | Successful: {oks} | Failed: {fails}'
+            f' | Successful with tool errors: {with_tool_errors}</p>'
+        )
+
+    if batch_issues:
+        html.append('<div class="issues">')
+        html.append('<h2 class="failed">Batch-level issues</h2>')
+        html.append("<table><thead><tr><th>Step</th><th>Error</th></tr></thead><tbody>")
+        for step, err in batch_issues:
+            html.append(f"<tr><td><code>{escape(str(step))}</code></td><td>{escape(str(err))}</td></tr>")
+        html.append("</tbody></table></div>")
 
     html.append("<table>")
     html.append("""
@@ -1281,8 +1307,20 @@ def create_batch_index(reports_p: str, ok_rows: list[dict[str, str]], all_rows: 
                         extras.append(_html_link(fname_rel, fname))
 
         extras_html = "<br>".join(extras) if extras else '<span class="missing">none</span>'
-        status_html = escape(status) if status != "failed" else f'<span class="failed">{escape(status)}</span>'
-        error_html = escape(error) if error else ""
+        tool_errors = str(row.get("tool_errors", "")).strip()
+        if status == "failed":
+            status_html = f'<span class="failed">{escape(status)}</span>'
+        elif tool_errors:
+            status_html = f'{escape(status)}<br><span class="warning">tool errors</span>'
+        else:
+            status_html = escape(status)
+        error_parts = []
+        if error:
+            error_parts.append(escape(error))
+        if tool_errors:
+            items = "".join(f"<li>{escape(item.strip())}</li>" for item in tool_errors.split(";") if item.strip())
+            error_parts.append(f'<div class="tool-errors">Tool errors:<ul>{items}</ul></div>')
+        error_html = "".join(error_parts)
 
         html.append(f"""
         <tr>
@@ -1361,10 +1399,18 @@ def create_batch_zip(reports_p: str, ok_rows: list[dict[str, str]], zip_name: st
     return zip_fp
 
 
-def maybe_create_batch_artifacts(reports_p: str, batch_summary_fp: str, extra_files: Optional[list[str]] = None) -> bool:
+def maybe_create_batch_artifacts(
+    reports_p: str,
+    batch_summary_fp: str,
+    extra_files: Optional[list[str]] = None,
+    batch_issues: Optional[list[tuple[str, str]]] = None,
+) -> bool:
     """
-    Create batch index + zip only if the provided batch summary exists, is valid,
-    and contains at least one successful sample.
+    Create the batch index and zip from a valid batch summary.
+
+    The index is always written when the summary has rows, so batches where
+    every sample failed still get a page listing the errors. The zip is only
+    created when at least one sample succeeded.
 
     Parameters
     ----------
@@ -1372,11 +1418,16 @@ def maybe_create_batch_artifacts(reports_p: str, batch_summary_fp: str, extra_fi
         Reports directory.
     batch_summary_fp : str
         Path to a specific batch summary TSV.
+    extra_files : list[str], optional
+        Additional batch-root files to include in the zip.
+    batch_issues : list[tuple[str, str]], optional
+        Batch-level failures shown at the top of the index.
 
     Returns
     -------
     bool
-        True if artifacts were generated, False otherwise.
+        True if the index (and, with successful samples, the zip) was
+        generated, False otherwise.
     """
     if not batch_summary_fp:
         return False
@@ -1414,17 +1465,18 @@ def maybe_create_batch_artifacts(reports_p: str, batch_summary_fp: str, extra_fi
            and str(row.get("file_tag", "")).strip() != ""
     ]
 
-    if not ok_rows:
-        return False
-
     index_name, zip_name = _derive_batch_artifact_names(batch_summary_fp)
 
     create_batch_index(
         reports_p=reports_p,
         ok_rows=ok_rows,
         all_rows=rows,
-        output_name=index_name
+        output_name=index_name,
+        batch_issues=batch_issues,
     )
+
+    if not ok_rows:
+        return True
 
     create_batch_zip(
         reports_p=reports_p,

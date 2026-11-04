@@ -50,9 +50,20 @@ _BATCH_SUMMARY_FIELDS = [
     'genin2_genotype', 'genin2_subgenotype',
     'genin2_pb2', 'genin2_pb1', 'genin2_pa', 'genin2_np', 'genin2_na', 'genin2_mp', 'genin2_ns',
     'mutations_of_interest',
+    'flumut_status', 'nextclade_status', 'genin2_status', 'getref_status',
+    'tool_errors',
 ]
 
+# Batch-summary status columns mapped to the Tool Status keys stored in flags.
+_BATCH_TOOL_STATUS_FIELDS = {
+    'flumut_status': 'flumut',
+    'nextclade_status': 'nextclade',
+    'genin2_status': 'genin',
+    'getref_status': 'getref',
+}
+
 _FLUMUT_BATCH_SEPARATOR = '__SEP__'
+_STDERR_TAIL_LINES = 15
 
 
 def _set_tool_status(flags: dict, tool: str, status: str, detail: str = '') -> None:
@@ -62,6 +73,32 @@ def _set_tool_status(flags: dict, tool: str, status: str, detail: str = '') -> N
         'status': status,
         'detail': detail,
     }
+
+
+def _run_stage(flags: dict, stage: str, func: Any, *args: Any, on_failure: Any = None, **kwargs: Any) -> Any:
+    """
+    Run one fatal pipeline stage and record its outcome in ``flags['Tool Status']``.
+
+    On failure the stage is marked ``failed`` with the error text, ``on_failure``
+    is called (e.g. to persist flags.json), and the exception is re-raised with
+    ``afluid_flags``/``afluid_stage`` attributes attached so batch mode can
+    report which stage broke.
+    """
+    try:
+        result = func(*args, **kwargs)
+    except Exception as exc:
+        _set_tool_status(flags, stage, 'failed', str(exc))
+        if not hasattr(exc, 'afluid_stage'):
+            exc.afluid_stage = stage
+            exc.afluid_flags = flags
+        if on_failure is not None:
+            try:
+                on_failure()
+            except Exception as persist_exc:
+                print(f'Warning: could not persist flags after {stage} failure: {persist_exc}')
+        raise
+    _set_tool_status(flags, stage, 'completed')
+    return result
 
 
 def _write_flags_json(reports_p: str, output_tag: str, flags: dict) -> None:
@@ -178,12 +215,40 @@ def _require_files(paths: Iterable[str], context: str) -> None:
 def _run_command(command: list[str], tool_name: str, sample_tag: str = '', expected_outputs: Optional[Iterable[str]] = None,
                  stdout: Any = None, stderr: Any = None, tool_versions: Optional[dict[str, str]] = None,
                  capture_tool_versions: bool = False) -> None:
-    """Run an external command and raise a contextual error on failure."""
+    """
+    Run an external command and raise a contextual error on failure.
+
+    When ``stderr`` is not redirected by the caller, it is captured, echoed to
+    the console unchanged, and its tail is appended to the raised error so the
+    failure reason reaches flags.json and the batch summary.
+    """
     _record_tool_versions(command, tool_versions, enabled=capture_tool_versions)
-    completed = subprocess.run(command, stdout=stdout, stderr=stderr)
+    sample_msg = f' for {sample_tag}' if sample_tag else ''
+    capture_stderr = stderr is None
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=stdout,
+            stderr=subprocess.PIPE if capture_stderr else stderr,
+            text=True if capture_stderr else None,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f'{tool_name} failed{sample_msg}: executable not found ({command[0]})') from exc
+
+    stderr_text = completed.stderr if capture_stderr and completed.stderr else ''
+    if stderr_text:
+        sys.stderr.write(stderr_text)
+        sys.stderr.flush()
+
     if completed.returncode != 0:
-        sample_msg = f' for {sample_tag}' if sample_tag else ''
-        raise RuntimeError(f'{tool_name} failed{sample_msg} with exit code {completed.returncode}')
+        message = f'{tool_name} failed{sample_msg} with exit code {completed.returncode}'
+        if stderr_text:
+            tail = [line.strip() for line in stderr_text.splitlines() if line.strip()][-_STDERR_TAIL_LINES:]
+            if tail:
+                message += ': ' + ' | '.join(tail)
+        elif not capture_stderr and hasattr(stderr, 'name'):
+            message += f' (see log: {stderr.name})'
+        raise RuntimeError(message)
     if expected_outputs:
         _require_files(expected_outputs, f'{tool_name} completed but did not produce all expected outputs')
 
@@ -1195,6 +1260,8 @@ def redirector(report: str, flags: dict, file_tag: str, mappings: dict[str, str]
     #Directing samples to Final Reports
     if mode == 'consensus':
         if single_sample==False:
+            # Intended: pure multi-sample runs (-ss off) always send every sequence
+            # to FluMut, since there is no single sample-level H5 call to route on.
             force_flumut = True
         if flags['Sample']['H_gen']=='H5' or force_flumut:
             for i in Seq_names:
@@ -2212,18 +2279,30 @@ def run_batch_pipeline(
                 timestamp='',
             )
 
-            results.append({
-                'input_file': fasta_file,
-                'file_tag': failed_tag,
-                'status': 'failed',
-                'error': str(e),
-                'sample_dir': batch_output_paths['sample_folder'],
-                'reports_dir_rel': batch_output_paths['reports_dir_rel'],
-                **{field: '' for field in _BATCH_SUMMARY_FIELDS if field not in ('input_file', 'file_tag', 'status', 'error', 'sample_dir', 'reports_dir_rel', 'flumut_ran', 'nextclade_ran', 'genin2_ran')},
+            failed_stage = getattr(e, 'afluid_stage', '')
+            failed_flags = getattr(e, 'afluid_flags', None)
+            failed_row = {field: '' for field in _BATCH_SUMMARY_FIELDS}
+            failed_row.update({
                 'flumut_ran': 'no',
                 'nextclade_ran': 'no',
                 'genin2_ran': 'no',
             })
+            if isinstance(failed_flags, dict):
+                # Keep whatever per-tool statuses were recorded before the fatal stage.
+                tool_fields = extract_batch_summary_fields(failed_flags)
+                for field in ('flumut_ran', 'nextclade_ran', 'genin2_ran', *_BATCH_TOOL_STATUS_FIELDS):
+                    failed_row[field] = tool_fields.get(field, failed_row[field])
+                # The fatal stage is already in 'error'; list only the other tool failures.
+                failed_row['tool_errors'] = _format_tool_errors(failed_flags, exclude=(failed_stage,))
+            failed_row.update({
+                'input_file': fasta_file,
+                'file_tag': failed_tag,
+                'status': 'failed',
+                'error': f'{failed_stage}: {e}' if failed_stage else str(e),
+                'sample_dir': batch_output_paths['sample_folder'],
+                'reports_dir_rel': batch_output_paths['reports_dir_rel'],
+            })
+            results.append(failed_row)
 
     # Extract per-segment cluster names from each sample's ID_Report
     for row in results:
@@ -2294,29 +2373,71 @@ def run_batch_pipeline(
         for row in results
         if str(row.get('status', '')).strip().lower() == 'ok' and str(row.get('file_tag', '')).strip()
     ]
-    export_cluster_composition(
-        id_report_fps=successful_id_report_fps,
-        metadata_csv_fp=os.path.join(metadata_p, config['Filenames']['metadata']),
-        cluster_clstr_fp=os.path.join(clusters_p, config['Filenames']['cluster_clstr']),
-        output_fp=os.path.join(batch_artifact_root, batch_cluster_composition_name),
-    )
 
-    maybe_create_batch_artifacts(
-        batch_artifact_root,
-        batch_summary_fp,
-        extra_files=batch_extra_files,
-    )
+    batch_issues: list[tuple[str, str]] = []
+    if batch_flumut_error:
+        batch_issues.append(('batch_flumut_workbook', batch_flumut_error))
 
-    if failures or batch_flumut_error:
+    try:
+        export_cluster_composition(
+            id_report_fps=successful_id_report_fps,
+            metadata_csv_fp=os.path.join(metadata_p, config['Filenames']['metadata']),
+            cluster_clstr_fp=os.path.join(clusters_p, config['Filenames']['cluster_clstr']),
+            output_fp=os.path.join(batch_artifact_root, batch_cluster_composition_name),
+        )
+    except Exception as exc:
+        batch_issues.append(('batch_cluster_composition', str(exc)))
+        print(f'Warning: batch cluster composition export failed: {exc}')
+    if not os.path.isfile(os.path.join(batch_artifact_root, batch_cluster_composition_name)):
+        batch_extra_files.remove(batch_cluster_composition_name)
+
+    batch_issues_name = f'batch_issues_{batch_name}.tsv'
+    if batch_issues:
+        _write_batch_issues_tsv(os.path.join(batch_artifact_root, batch_issues_name), batch_issues)
+        batch_extra_files.append(batch_issues_name)
+
+    try:
+        artifacts_created = maybe_create_batch_artifacts(
+            batch_artifact_root,
+            batch_summary_fp,
+            extra_files=batch_extra_files,
+            batch_issues=batch_issues,
+        )
+        if not artifacts_created:
+            raise RuntimeError('batch index/zip were not created (see batch summary for per-sample errors)')
+    except Exception as exc:
+        batch_issues.append(('batch_artifacts', str(exc)))
+        _write_batch_issues_tsv(os.path.join(batch_artifact_root, batch_issues_name), batch_issues)
+        print(f'Warning: batch artifact creation failed: {exc}')
+
+    tool_error_rows = [
+        row for row in results
+        if str(row.get('status', '')).strip().lower() == 'ok' and str(row.get('tool_errors', '')).strip()
+    ]
+    if tool_error_rows:
+        print("\nSamples completed with tool errors:")
+        for row in tool_error_rows:
+            print(f" - {row.get('input_file', '')}: {row.get('tool_errors', '')}")
+
+    if failures or batch_issues:
         print("\nBatch completed with failures:")
         for fasta_file, err in failures:
             print(f" - {fasta_file}: {err}")
-        if batch_flumut_error:
-            print(f" - batch-wide FluMut workbook: {batch_flumut_error}")
+        for step, err in batch_issues:
+            print(f" - {step}: {err}")
         return 1
 
     print("\nBatch completed successfully")
     return 0
+
+
+def _write_batch_issues_tsv(output_fp: str, issues: list[tuple[str, str]]) -> None:
+    """Write batch-level (not per-sample) failures to a small TSV."""
+    with open(output_fp, 'w', encoding='utf-8', newline='') as out:
+        out.write('step\terror\n')
+        for step, error in issues:
+            clean = ' '.join(str(error).split())
+            out.write(f'{step}\t{clean}\n')
 
 
 def prepare_output_targets(targets: list[str], replace: bool) -> None:
@@ -2462,8 +2583,27 @@ def extract_batch_summary_fields(flags: dict) -> dict[str, str]:
         'genotype': str(sample.get('Genotype', '')).strip(),
         'mutations_of_interest': _format_mutations_of_interest(flags),
     }
+    tool_status = flags.get('Tool Status', {}) or {}
+    for field, tool_name in _BATCH_TOOL_STATUS_FIELDS.items():
+        summary[field] = str(tool_status.get(tool_name, {}).get('status', '')).strip()
+    summary['tool_errors'] = _format_tool_errors(flags)
     summary.update(_normalize_genin_summary(sample.get('Genin_genotypes', [])))
     return summary
+
+
+def _format_tool_errors(flags: dict, exclude: Iterable[str] = ()) -> str:
+    """Join every failed Tool Status entry as ``tool: detail`` separated by semicolons."""
+    errors = []
+    excluded = set(exclude)
+    for tool_name, entry in (flags.get('Tool Status', {}) or {}).items():
+        if tool_name in excluded:
+            continue
+        if not isinstance(entry, dict) or str(entry.get('status', '')).strip().lower() != 'failed':
+            continue
+        detail = ' '.join(str(entry.get('detail', '')).split())
+        detail = detail.replace(';', ',')
+        errors.append(f'{tool_name}: {detail}' if detail else tool_name)
+    return '; '.join(errors)
 
 
 
@@ -2791,20 +2931,20 @@ def run_pipeline_for_file(
         for i in off_apps:
             print(f'Turning off: {i}')
             flags['Master'][i] = False
-    forced_genin=False
+    # Explicit -ff/--force requests. These are distinct from flags['Master'], which
+    # only says a tool is *enabled*; routing (e.g. FluMut only for H5) still applies
+    # unless the tool is forced here.
+    forced_flumut = bool(force_apps) and 'flumut' in force_apps
+    forced_genin = bool(force_apps) and 'genin' in force_apps
+    forced_getref = bool(force_apps) and 'getref' in force_apps
     if force_apps:
         print('Forcing additional tools, please be mindful of the results')
-        forced_flumut = force_apps is not None and 'flumut' in force_apps
-        forced_genin = force_apps is not None and 'genin' in force_apps
-        forced_getref = force_apps is not None and 'getref' in force_apps
-        if force_apps:
-            print('Forcing additional tools, please be mindful of the results')
-            if forced_flumut:
-                flags['Master']['flumut'] = True
-            if forced_genin:
-                flags['Master']['genin'] = True
-            if forced_getref:
-                flags['Master']['getref'] = True
+        if forced_flumut:
+            flags['Master']['flumut'] = True
+        if forced_genin:
+            flags['Master']['genin'] = True
+        if forced_getref:
+            flags['Master']['getref'] = True
 
     selection_start_min = min_len
 
@@ -2839,8 +2979,15 @@ def run_pipeline_for_file(
     if mode == 'contig' and single:
         preprocess_min = contig_single_min_floor_bp
 
-    try:
-        mappings = fasta_preprocess(
+    def _persist_flags() -> None:
+        flags['Tool Versions'] = dict(tool_versions)
+        _write_flags_json(active_reports_p, output_tag, flags)
+
+    def stage(name: str, func: Any, *args: Any, **kwargs: Any) -> Any:
+        return _run_stage(flags, name, func, *args, on_failure=_persist_flags, **kwargs)
+
+    def _preprocess() -> dict[str, str]:
+        result = fasta_preprocess(
             filename,
             samples_p,
             runs_p,
@@ -2850,20 +2997,15 @@ def run_pipeline_for_file(
             flags,
             verbose=True
         )
-    except Exception as exc:
-        _set_tool_status(flags, 'preprocess', 'failed', str(exc))
-        flags['Tool Versions'] = dict(tool_versions)
-        _write_flags_json(active_reports_p, output_tag, flags)
-        raise
+        if not result:
+            raise ValueError(
+                f'No sequences remained after preprocessing for {filename}. '
+                'Adjust the sequence length thresholds or inspect the input FASTA.'
+            )
+        _require_files([formatted_fasta_fp], 'FASTA preprocessing did not produce the formatted sample FASTA')
+        return result
 
-    if not mappings:
-        raise ValueError(
-            f'No sequences remained after preprocessing for {filename}. '
-            'Adjust the sequence length thresholds or inspect the input FASTA.'
-        )
-
-    _require_files([formatted_fasta_fp], 'FASTA preprocessing did not produce the formatted sample FASTA')
-    _set_tool_status(flags, 'preprocess', 'completed')
+    mappings = stage('preprocess', _preprocess)
 
     threads = int(config['blast']['num_threads'])
     num_seqs = int(config['blast']['max_target_seqs'])
@@ -2872,7 +3014,7 @@ def run_pipeline_for_file(
         cluster_report = {}
         flags['Master']['C_BLAST'] = True
         _set_tool_status(flags, 'cd_hit', 'skipped', 'Pipeline was run with --skip_cdhit')
-        blast_cluster = bclust(
+        blast_cluster = stage('c_blast', bclust,
             clusters_p,
             config["Filenames"]["cluster_metadata"],
             runs_p,
@@ -2888,7 +3030,7 @@ def run_pipeline_for_file(
             capture_tool_versions=capture_tool_versions,
         )
         if flags['Master']['L_BLAST']:
-            blast_report = reblast(
+            blast_report = stage('l_blast', reblast,
                 metadata_p,
                 config["Filenames"]["metadata"],
                 runs_p,
@@ -2902,7 +3044,7 @@ def run_pipeline_for_file(
                 tool_versions=tool_versions,
                 capture_tool_versions=capture_tool_versions,
             )
-            report_compiler(
+            stage('id_report', report_compiler,
                 cluster_report,
                 runs_p,
                 output_tag,
@@ -2913,7 +3055,7 @@ def run_pipeline_for_file(
                 blast_dict=blast_report
             )
         else:
-            report_compiler(
+            stage('id_report', report_compiler,
                 cluster_report,
                 runs_p,
                 output_tag,
@@ -2923,7 +3065,7 @@ def run_pipeline_for_file(
                 bclust_dict=blast_cluster
             )
     else:
-        cd_hit_est_2d(
+        stage('cd_hit', cd_hit_est_2d,
             formatted_fasta_fp,
             os.path.join(clusters_p, config["Filenames"]["cluster"]),
             formatted_fasta_base,
@@ -2934,31 +3076,30 @@ def run_pipeline_for_file(
             tool_versions=tool_versions,
             capture_tool_versions=capture_tool_versions,
         )
-        _set_tool_status(flags, 'cd_hit', 'completed')
 
-        assignments = cluster_assign(
+        assignments = stage('cluster_parse', cluster_assign,
             f'format_{output_tag}.clstr',
             formatted_fasta_fp,
             runs_p
         )
-        _require_files(
+        stage('cluster_parse', _require_files,
             [os.path.join(runs_p, f'format_{output_tag}.clstr'), os.path.join(runs_p, f'format_{output_tag}.assign')],
             'CD-HIT clustering did not produce the expected assignment artifacts'
         )
 
-        dict_cluster = json_load(os.path.join(clusters_p, config["Filenames"]["cluster_pkl"]))
+        dict_cluster = stage('cluster_parse', json_load, os.path.join(clusters_p, config["Filenames"]["cluster_pkl"]))
 
-        cluster_compile(
+        stage('cluster_parse', cluster_compile,
             assignments,
             dict_cluster,
             os.path.join(runs_p, f'format_{output_tag}.assign'),
             active_reports_p
         )
 
-        cluster_report = cluster_miner(active_reports_p, output_tag, runs_p, runs_p, flags)
+        cluster_report = stage('cluster_parse', cluster_miner, active_reports_p, output_tag, runs_p, runs_p, flags)
 
         if flags['Master']['C_BLAST']:
-            blast_cluster = bclust(
+            blast_cluster = stage('c_blast', bclust,
                 clusters_p,
                 config["Filenames"]["cluster_metadata"],
                 runs_p,
@@ -2975,7 +3116,7 @@ def run_pipeline_for_file(
             )
 
             if flags['Master']['L_BLAST']:
-                blast_report = reblast(
+                blast_report = stage('l_blast', reblast,
                     metadata_p,
                     config["Filenames"]["metadata"],
                     runs_p,
@@ -2989,7 +3130,7 @@ def run_pipeline_for_file(
                     tool_versions=tool_versions,
                     capture_tool_versions=capture_tool_versions,
                 )
-                report_compiler(
+                stage('id_report', report_compiler,
                     cluster_report,
                     runs_p,
                     output_tag,
@@ -3000,7 +3141,7 @@ def run_pipeline_for_file(
                     blast_dict=blast_report
                 )
             else:
-                report_compiler(
+                stage('id_report', report_compiler,
                     cluster_report,
                     runs_p,
                     output_tag,
@@ -3010,7 +3151,7 @@ def run_pipeline_for_file(
                     bclust_dict=blast_cluster
                 )
         else:
-            report_compiler(
+            stage('id_report', report_compiler,
                 cluster_report,
                 runs_p,
                 output_tag,
@@ -3020,10 +3161,10 @@ def run_pipeline_for_file(
             )
 
     id_report_fp = os.path.join(active_reports_p, f"{output_tag}_ID_Report.txt")
-    _require_files([id_report_fp], 'Pipeline identification path did not produce the ID report')
+    stage('id_report', _require_files, [id_report_fp], 'Pipeline identification path did not produce the ID report')
 
     if mode == 'contig' and single:
-        best_segments, min_used = compute_best_segments_iterative(
+        best_segments, min_used = stage('best_segments', compute_best_segments_iterative,
             id_report_fp,
             formatted_fasta_fp,
             mappings,
@@ -3034,33 +3175,33 @@ def run_pipeline_for_file(
         flags['Sample']['best_segments'] = best_segments
         flags['Sample']['best_segments_min_len'] = min_used
 
-    redirector(
+    stage('redirector', redirector,
         f"{output_tag}_ID_Report.txt",
         flags,
         output_tag,
         mappings,
         runs_p,
         active_reports_p,
-        force_flumut=flags['Master']['flumut'],
-        force_genin=flags['Master']['genin'],
-        force_getref=flags['Master']['getref'],
+        force_flumut=forced_flumut,
+        force_genin=forced_genin,
+        force_getref=forced_getref,
         mode=mode,
         single_sample=single
     )
 
-    geo_dict, taxa_dict = load_reference_dicts(
+    geo_dict, taxa_dict = stage('rollup_export', load_reference_dicts,
         data_dir=metadata_p,
         geo_json_relpath=geo,
         tax_json_relpath=taxa,
     )
-    export_id_report_rollup(
+    stage('rollup_export', export_id_report_rollup,
         id_report_fp=id_report_fp,
         output_fp=os.path.join(active_reports_p, f'{output_tag}_ID_Report_rollup.tsv'),
         geo_dict=geo_dict,
         taxa_dict=taxa_dict,
     )
     if not batch:
-        export_cluster_composition(
+        stage('rollup_export', export_cluster_composition,
             id_report_fps=[id_report_fp],
             metadata_csv_fp=os.path.join(metadata_p, config['Filenames']['metadata']),
             cluster_clstr_fp=os.path.join(clusters_p, config['Filenames']['cluster_clstr']),
@@ -3070,7 +3211,12 @@ def run_pipeline_for_file(
     _set_tool_status(flags, 'flumut', 'skipped', 'FluMut routing not enabled for this sample')
     flumut_input_fp = os.path.join(runs_p, f'{output_tag}_to_flumut.fasta')
     batch_flumut_input_fp = ''
-    if flags['Master']['flumut']:
+    if flags['Master']['flumut'] and not flags['Final Report']['Sequences for FluMut']:
+        _set_tool_status(
+            flags, 'flumut', 'skipped',
+            'No sequences routed to FluMut (sample is not H5; use -ff flumut to force)',
+        )
+    elif flags['Master']['flumut']:
         try:
             markers_fp = os.path.join(active_reports_p, f'{output_tag}_markers.tsv')
             mutations_fp = os.path.join(active_reports_p, f'{output_tag}_mutations.tsv')
@@ -3089,7 +3235,14 @@ def run_pipeline_for_file(
                 )
                 _require_files([batch_flumut_input_fp], 'Batch FluMut preparation did not produce the expected input FASTA')
             if update_flumut.upper() == 'ON':
-                update_flumut_db(tool_versions=tool_versions, capture_tool_versions=capture_tool_versions)
+                try:
+                    update_flumut_db(tool_versions=tool_versions, capture_tool_versions=capture_tool_versions)
+                    _set_tool_status(flags, 'flumut_db_update', 'completed')
+                except Exception as db_exc:
+                    _set_tool_status(flags, 'flumut_db_update', 'failed', f'{db_exc} (continuing with the existing FluMut DB)')
+                    print(f'Warning: FluMut DB update failed for {output_tag}, using the existing DB: {db_exc}')
+            else:
+                _set_tool_status(flags, 'flumut_db_update', 'skipped', 'FluMut DB auto-update turned off (-fdb off)')
             run_flumut(
                 active_reports_p,
                 runs_p,
@@ -3154,16 +3307,24 @@ def run_pipeline_for_file(
             _set_tool_status(flags, 'nextclade', 'failed', str(exc))
             print(f'Warning: skipping Nextclade for {output_tag}: {exc}')
 
+    _set_tool_status(flags, 'getref', 'skipped', 'Reference retrieval not enabled for this sample')
     if flags['Master']['getref']:
-        get_reference(
-            flags['Final Report']['Get References'],
-            references_p,
-            active_reference_output_p,
-            config['Filenames']['ref_db'],
-            output_tag,
-            email=config['getref']['email'],
-            update_local_db=True
-        )
+        try:
+            get_reference(
+                flags['Final Report']['Get References'],
+                references_p,
+                active_reference_output_p,
+                config['Filenames']['ref_db'],
+                output_tag,
+                email=config['getref']['email'],
+                update_local_db=True
+            )
+            _set_tool_status(flags, 'getref', 'completed')
+        except Exception as exc:
+            _set_tool_status(flags, 'getref', 'failed', str(exc))
+            print(f'Warning: skipping reference retrieval for {output_tag}: {exc}')
+
+    flumut_failed = flags['Tool Status'].get('flumut', {}).get('status') == 'failed'
 
     if forced_genin:
         flags['Master']['genin'] = True
@@ -3179,7 +3340,15 @@ def run_pipeline_for_file(
     else:
         flags['Final Report']['Sequences for GenIn'] = []
 
-    _set_tool_status(flags, 'genin', 'skipped', 'GenIn2 routing not enabled for this sample')
+    if flags['Master']['genin'] and flumut_failed and not flags['Final Report']['Sequences for GenIn']:
+        # GenIn2 reuses the FluMut-routed sequences; a FluMut failure clears them.
+        flags['Master']['genin'] = False
+        _set_tool_status(flags, 'genin', 'skipped', 'GenIn2 input depends on FluMut routing, and FluMut failed')
+    elif (not flags['Master']['genin'] and single and flags['Sample'].get('H_gen') == 'H5'
+          and flags['Tool Status'].get('nextclade', {}).get('status') == 'failed'):
+        _set_tool_status(flags, 'genin', 'skipped', 'GenIn2 routing needs the Nextclade clade for H5 samples, and Nextclade failed')
+    else:
+        _set_tool_status(flags, 'genin', 'skipped', 'GenIn2 routing not enabled for this sample')
     if flags['Master']['genin']:
         try:
             genin_fp = os.path.join(active_reports_p, f'{output_tag}_genin.tsv')
@@ -3225,6 +3394,8 @@ def run_pipeline_for_file(
             _set_tool_status(flags, 'final_report', 'completed')
         except Exception as exc:
             _set_tool_status(flags, 'final_report', 'failed', str(exc))
+            exc.afluid_stage = 'final_report'
+            exc.afluid_flags = flags
             flags['Tool Versions'] = dict(tool_versions)
             _write_flags_json(active_reports_p, output_tag, flags)
             raise

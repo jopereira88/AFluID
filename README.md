@@ -95,6 +95,12 @@ In single-sample mode, reports are written to per-sample folders under the confi
 
 In batch mode, reports and exported references are grouped under a batch directory. With the default paths, reports are written under ```<reports>/<batch_name>/<sample>/``` and exported references under ```<references>/<batch_name>/<sample>/```. When ```--outdir``` is used, reports are written to ```<outdir>/<batch_name>/<sample>/reports/``` and exported references to ```<outdir>/<batch_name>/<sample>/references/```. The batch summary, batch index, and batch ZIP are written at the batch root, and the HTML index and ZIP preserve the nested sample folder structure.
 
+Error reporting in batch mode:
+* A sample whose identification fails is marked ```status=failed``` in the batch summary, and its ```error``` column names the failing stage (e.g. ```preprocess: ...```, ```c_blast: ...```).
+* Downstream tool failures (FluMut, Nextclade, GenIn2, reference retrieval, FluMut DB update) do not stop the sample. The sample stays ```status=ok```, the ```flumut_status```, ```nextclade_status```, ```genin2_status``` and ```getref_status``` columns record ```completed```, ```failed``` or ```skipped```, and the ```tool_errors``` column lists each failure with the tool's error output. The batch index flags these samples with a "tool errors" badge.
+* Batch-wide problems (batch FluMut workbook, batch cluster composition, index/ZIP creation) are written to ```batch_issues_<batch_name>.tsv``` and shown at the top of the batch index. The batch index is still created when every sample fails.
+* Every sample's ```<tag>_flags.json``` holds the full per-stage ```Tool Status``` record, including skip reasons.
+
 Sample usage (one sample per file, default config file, single sample mode, no forces, no offs, consensus mode):
 
 ```

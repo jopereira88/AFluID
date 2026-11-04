@@ -2736,7 +2736,7 @@ def create_segment_background_table_multi(
     <table class="tabela" id="sb-multi-table">
     <thead>
       <tr>
-        <th>Sample Name</th>
+        <th style="max-width:2.5cm;min-width:1cm;overflow-wrap:break-word;white-space:normal">Sample Name</th>
         <th>Segment</th>
         <th>SeqLen</th>
         <th>Note</th>
@@ -2811,7 +2811,7 @@ def create_segment_background_table_multi(
 
         table += f"""
         <tr>
-          <td>{sample_name}</td>
+          <td style="max-width:2.5cm;min-width:1.5cm;overflow-wrap:break-word">{sample_name}</td>
           <td>{segment}</td>
           <td>{length_html}</td>
           <td>{note}</td>
@@ -3391,7 +3391,7 @@ def generate_final_report(
             seg_lens,
             mappings,
             muts_loci_meaning,
-            html_skeleton,
+            html_skeleton_multi,
             output_file_path,
             filename,
             runs_p=runs_p,

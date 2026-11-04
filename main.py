@@ -1436,13 +1436,23 @@ def remap_flumut_report(reports_dir: str, mappings: dict, filename: str) -> None
     #Create a mapping dictionary with the original sequence names replaced by the new names
     mapping_dict = {key.replace('>', ''): value for key, value in mappings.items()}
 
+    def _remap_value(val, mapping_dict):
+        val_str = str(val).strip()
+        for internal, original in mapping_dict.items():
+            if val_str == internal or val_str.startswith(internal + '_'):
+                return original
+            stripped = val_str.lstrip('>')
+            if stripped == internal or stripped.startswith(internal + '_'):
+                return original
+        return val_str
+
     #Read the markers report file and replace the original sequence names with the new names
     mk_report = pd.read_table(os.path.join(reports_dir,f'{filename}_markers.tsv'))
-    mk_report = mk_report.replace(mapping_dict)
+    mk_report = mk_report.map(lambda x: _remap_value(x, mapping_dict))
 
     #Read the mutations report file and replace the original sequence names with the new names
     mut_report = pd.read_table(os.path.join(reports_dir,f'{filename}_mutations.tsv'), low_memory=False)
-    mut_report = mut_report.replace(mapping_dict)
+    mut_report = mut_report.map(lambda x: _remap_value(x, mapping_dict))
 
     #Save the modified markers report file9
     mk_report.to_csv(os.path.join(reports_dir,f'{filename}_markers.tsv'), sep='\t', index=False)
@@ -1907,7 +1917,7 @@ def parser() -> argparse.Namespace:
     parser.add_argument('-ss', '--single_sample', type=str, help='Single sample mode', default='on', choices=('on', 'off'), required=False)
     parser.add_argument('-o', '--output_name', type=str, help='Optional output stem for direct non-batch single-file runs', required=False)
     parser.add_argument('-off', '--turn_off', help='Turn Off additional analysis tools', nargs='*', choices=('flumut', 'genin', 'nextclade', 'getref'))
-    parser.add_argument('-rm', '--remove_previous', type=str, help='Remove previous files', default='on', choices=('on', 'off'), required=False)
+    parser.add_argument('-p', '--parallel', action='store_true', help='Allow multiple pipeline instances to run concurrently by skipping cleanup')
     parser.add_argument('-Ml', '--max_length', type=int, help='Maximum sequence length', required=False)
     parser.add_argument('-ml', '--min_length', type=int, help='Minimum sequence length', required=False)
     parser.add_argument('--outdir', type=str, help='Optional root directory for per-sample report/reference outputs', required=False)
@@ -2089,7 +2099,6 @@ def run_batch_pipeline(
     update_flumut: str,
     off_apps: list[str] | None,
     force_apps: list[str] | None,
-    rm_previous: bool,
     max_len: int,
     min_len: int,
     geo: str,
@@ -2157,7 +2166,6 @@ def run_batch_pipeline(
                 update_flumut=update_flumut,
                 off_apps=off_apps,
                 force_apps=force_apps,
-                rm_previous=rm_previous,
                 max_len=max_len,
                 min_len=min_len,
                 geo=geo,
@@ -2728,7 +2736,6 @@ def run_pipeline_for_file(
     update_flumut: str,
     off_apps: list[str] | None,
     force_apps: list[str] | None,
-    rm_previous: bool,
     max_len: int,
     min_len: int,
     geo: str,
@@ -3278,7 +3285,7 @@ def main(flagdict: dict = flagdict) -> None:
     geo_json=config['Filenames']['geo']
     taxa_json=config['Filenames']['taxa']
 
-    rm_previous = config['Functions']['remove_previous'] if args.remove_previous.lower() == 'on' else False
+    rm_previous = config.getboolean('Functions', 'remove_previous')
 
     samples_p = resolve_config_path(samples, project_root)
     runs_root_p = resolve_config_path(runs, project_root)
@@ -3296,7 +3303,7 @@ def main(flagdict: dict = flagdict) -> None:
     print('Mode:', mode)
     print('Batch mode:', args.batch)
     print('Single sample mode:', single)
-    print('Remove previous files:', rm_previous)
+    print('Cleanup runs directory:', rm_previous and not args.parallel)
     print('Update Flumut DB:', update_flumut)
     print('Max sequence length:', max_len)
     print('Min sequence length:', min_len)
@@ -3327,7 +3334,7 @@ def main(flagdict: dict = flagdict) -> None:
         os.makedirs(logs_p)
 
     # Optional cleanup
-    if rm_previous:
+    if rm_previous and not args.parallel:
         # Clean runs directory
         for file in glob.glob(os.path.join(runs_root_p, "*")):
             if os.path.isfile(file):
@@ -3392,7 +3399,6 @@ def main(flagdict: dict = flagdict) -> None:
                 update_flumut=update_flumut,
                 off_apps=off_apps,
                 force_apps=force_apps,
-                rm_previous=rm_previous,
                 max_len=max_len,
                 min_len=min_len,
                 geo=geo_json,
@@ -3453,7 +3459,6 @@ def main(flagdict: dict = flagdict) -> None:
                         update_flumut=update_flumut,
                         off_apps=off_apps,
                         force_apps=force_apps,
-                        rm_previous=rm_previous,
                         max_len=max_len,
                         min_len=min_len,
                         geo=geo_json,
@@ -3522,7 +3527,6 @@ def main(flagdict: dict = flagdict) -> None:
             update_flumut=update_flumut,
             off_apps=off_apps,
             force_apps=force_apps,
-            rm_previous=rm_previous,
             max_len=max_len,
             min_len=min_len,
             geo=geo_json,

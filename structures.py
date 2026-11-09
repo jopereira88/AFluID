@@ -262,6 +262,11 @@ geo_syns = {
     "Virgin Islands, British": "British Virgin Islands",
 
     # ============================================================
+    # Antarctic territories
+    # ============================================================
+    "British Antarctic Territory": "Antarctica",
+
+    # ============================================================
     # Canonical self-maps likely to appear directly
     # ============================================================
     "Bouvet Island": "Bouvet Island",

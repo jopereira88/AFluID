@@ -1002,8 +1002,8 @@ class ClusterReportTable(MetadataTable):
                 for dic in elems:
                     tot=sum(list(dic.values()))
                     for i in dic:
-                        dic[i]=(dic[i]/tot)
-                        dic[i]=round(dic[i],3)
+                        # Working precision: reports round to 2 dp once roll-ups are done.
+                        dic[i]=round(dic[i]/tot,6)
                     perc[key]=dic
             except IndexError:
                 continue

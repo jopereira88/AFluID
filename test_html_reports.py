@@ -176,6 +176,7 @@ class HtmlReportTests(unittest.TestCase):
                 self.taxa_dict,
             )
 
+            self.assertLess(html.find('</table>'), html.find('entries shown as 0.0 are present in less than 0.5%'))
             self.assertLess(html.find('<td>PB1</td>'), html.find('<td>HA</td>'))
             self.assertLess(html.find('<th>Note</th>'), html.find('<th>Cluster</th>'))
             self.assertLess(html.find('<th>Cluster</th>'), html.find('<th>Reference</th>'))

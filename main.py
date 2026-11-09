@@ -27,6 +27,7 @@ from final_report_utils import (
     html_skeleton,
     export_cluster_composition,
     export_id_report_rollup,
+    finalize_id_report,
     generate_final_report,
     maybe_create_batch_artifacts,
     order_mutation_labels,
@@ -3401,6 +3402,8 @@ def run_pipeline_for_file(
             raise
         flags['Tool Versions'] = dict(tool_versions)
         _write_flags_json(active_reports_p, output_tag, flags)
+
+    stage('id_report', finalize_id_report, id_report_fp)
 
     if write_tool_versions_tsv and not batch and tool_versions:
         _write_tool_versions_tsv(active_reports_p, output_tag, tool_versions)

@@ -1,7 +1,5 @@
 import unittest
 import importlib
-import sys
-import types
 
 from metadata_tree_utils import load_reference_dicts
 
@@ -69,15 +67,6 @@ class MetadataTreeUtilsCompatibilityTests(unittest.TestCase):
 class FinalReportCompatibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        pd = types.ModuleType("pandas")
-        pd.isna = lambda value: value is None
-
-        class DataFrame:
-            pass
-
-        pd.DataFrame = DataFrame
-        sys.modules["pandas"] = pd
-
         final_report_utils = importlib.import_module("final_report_utils")
 
         cls.rollup_taxa = staticmethod(final_report_utils.rollup_taxa)

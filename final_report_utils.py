@@ -270,6 +270,12 @@ def _coerce_metadata_counter(cell: Any) -> dict[str, float]:
     return cleaned
 
 
+_ZERO_SHARE_NOTE = (
+    '<p class="muted">Note: entries shown as 0.0 are present in less than 0.5% of occurrences '
+    '(proportion below 0.005).</p>'
+)
+
+
 def _normalize_distribution_for_export(counter: dict[str, float], ndigits: int = 2) -> dict[str, float]:
     """Round a distribution deterministically while forcing the total to sum to 1.0."""
     if not counter:
@@ -283,9 +289,10 @@ def _normalize_distribution_for_export(counter: dict[str, float], ndigits: int =
             value_num = float(value)
         except Exception:
             continue
-        if not key_text or value_num <= 0:
+        # Zero is kept (a trace entry rounded to 0.00). NaN and infinity would poison the total.
+        if not key_text or not 0 <= value_num < float('inf'):
             continue
-        cleaned[key_text] = value_num
+        cleaned[key_text] = cleaned.get(key_text, 0.0) + value_num
         total += value_num
 
     if not cleaned or total <= 0:
@@ -293,33 +300,42 @@ def _normalize_distribution_for_export(counter: dict[str, float], ndigits: int =
 
     scale = 10 ** int(ndigits)
     ordered = sorted(cleaned.items(), key=lambda item: (-float(item[1]), str(item[0])))
-    normalized = [(key, value / total) for key, value in ordered]
-    base_units = []
-    used_units = 0
-
-    for key, value in normalized:
-        exact_units = value * scale
+    entries = []
+    for key, value in ordered:
+        exact_units = value / total * scale
         floor_units = int(exact_units)
-        remainder = exact_units - floor_units
-        base_units.append([key, floor_units, remainder])
-        used_units += floor_units
+        entries.append([key, floor_units, exact_units - floor_units])
 
-    remaining_units = scale - used_units
+    # Largest-remainder allocation, in whole units so the total is exact. Entries
+    # that round up from zero go first, so 0.00 always means below half a unit
+    # (the note under the segment background tables relies on this).
+    remaining_units = scale - sum(entry[1] for entry in entries)
+    rounds_up_from_zero = lambda entry: entry[1] == 0 and entry[2] >= 0.5
+    by_remainder = sorted(entries, key=lambda entry: (not rounds_up_from_zero(entry), -entry[2], str(entry[0])))
     if remaining_units > 0:
-        for key, floor_units, remainder in sorted(base_units, key=lambda item: (-item[2], str(item[0]))):
-            if remaining_units <= 0:
+        unfunded = [entry for entry in by_remainder[remaining_units:] if rounds_up_from_zero(entry)]
+        for entry in by_remainder[:remaining_units]:
+            entry[1] += 1
+        # More such entries than spare units: take from the largest entries,
+        # where one unit is the smallest relative change.
+        for entry in unfunded:
+            donor = max(entries, key=lambda item: item[1])
+            if donor[1] < 2:
                 break
-            for entry in base_units:
-                if entry[0] == key:
-                    entry[1] += 1
-                    remaining_units -= 1
-                    break
+            donor[1] -= 1
+            entry[1] += 1
+    elif remaining_units < 0:
+        # Only reachable through floating point error in exact_units.
+        for entry in [item for item in reversed(by_remainder) if item[1] > 0][:-remaining_units]:
+            entry[1] -= 1
 
-    rounded = {}
-    for key, units, _ in base_units:
-        rounded[key] = round(units / scale, ndigits)
+    allocated_units = sum(entry[1] for entry in entries)
+    if allocated_units != scale:
+        raise ValueError(
+            f'Distribution does not sum to 1: allocated {allocated_units}/{scale} units for {counter}'
+        )
 
-    return rounded
+    return {key: round(units / scale, ndigits) for key, units, _ in entries}
 
 
 def _serialize_distribution(counter: dict[str, float], ndigits: int = 2) -> str:
@@ -345,6 +361,41 @@ def _static_rollup_distribution(cell: Any, mapper: Callable[[str], str]) -> str:
         return 'Unknown'
 
     return _serialize_distribution(rolled, ndigits=2)
+
+
+def _format_distribution_cell(cell: Any) -> Any:
+    """Serialize a distribution cell to 2 dp; scalar cells are returned unchanged."""
+    counter = _coerce_metadata_counter(cell)
+    return _serialize_distribution(counter, ndigits=2) if counter else cell
+
+
+def finalize_id_report(id_report_fp: str) -> None:
+    """
+    Rewrite the ID report distributions to 2 dp, summing to 1.0.
+
+    The pipeline reads the report at working precision for routing and
+    roll-ups, because summing already rounded values loses trace entries. Call
+    this once nothing else needs that precision. Safe to call repeatedly.
+    """
+    with open(id_report_fp, 'r', encoding='utf-8') as report:
+        lines = report.read().splitlines()
+    if not lines:
+        return
+
+    header = lines[0].split('\t')
+    columns = [header.index(name) for name in ('GENOTYPE', 'HOST', 'COUNTRY') if name in header]
+    output = [lines[0]]
+    for line in lines[1:]:
+        cells = line.split('\t')
+        for index in columns:
+            if index < len(cells):
+                cells[index] = _format_distribution_cell(cells[index])
+        output.append('\t'.join(cells))
+
+    tmp_fp = f'{id_report_fp}.tmp'
+    with open(tmp_fp, 'w', encoding='utf-8') as report:
+        report.write('\n'.join(output) + '\n')
+    os.replace(tmp_fp, id_report_fp)
 
 
 def _collect_report_clusters(id_report_fps: Iterable[str]) -> list[str]:
@@ -415,6 +466,11 @@ def export_id_report_rollup(
             country_continent.append(
                 _static_rollup_distribution(country_value, lambda loc: rollup_geo(loc, geo_dict, mode='continent'))
             )
+
+    # Roll-ups above used the working precision, so these can now be rounded.
+    for col in ['GENOTYPE', 'HOST', 'COUNTRY']:
+        if col in df.columns:
+            df[col] = df[col].apply(_format_distribution_cell)
 
     df['HOST_FAMILY'] = host_family
     df['HOST_CLASS'] = host_class
@@ -771,39 +827,9 @@ def clean_host(host_cell: Any, taxa_dict: dict[str, list[str]], level: str = 'Sp
     dict
         Cleaned host proportions keyed by taxonomy label.
     """
-    if isinstance(host_cell, dict):
-        host_dict = dict(host_cell)
-    elif pd.isna(host_cell):
-        return {}
-    else:
-        host_cell = str(host_cell).strip().replace('%', '')
-        if not host_cell:
-            return {}
-        try:
-            host_dict = ast.literal_eval(host_cell)
-        except Exception:
-            return {}
-
-    if not isinstance(host_dict, dict):
-        return {}
-
-    cleaned = {}
-    for key, value in host_dict.items():
-        try:
-            cleaned[str(key).strip()] = float(value)
-        except Exception:
-            continue
-
-    cleaned = rollup_counts_taxa(cleaned, taxa_dict, level=level, drop_unknown=drop_unknown)
-
-    if round(sum(cleaned.values()), 3) > 1.1:
-        for key in cleaned:
-            cleaned[key] = round(cleaned[key] / 100, 3)
-    else:
-        for key in cleaned:
-            cleaned[key] = round(cleaned[key], 3)
-
-    return cleaned
+    cleaned = _coerce_metadata_counter(host_cell)
+    rolled = rollup_counts_taxa(cleaned, taxa_dict, level=level, drop_unknown=drop_unknown)
+    return _normalize_distribution_for_export(rolled)
 
 def clean_country(country_cell: Any, geo_dict: dict[str, tuple[str, str]], mode: str = 'country', drop_unknown: bool = True) -> dict[str, float]:
     """
@@ -826,44 +852,9 @@ def clean_country(country_cell: Any, geo_dict: dict[str, tuple[str, str]], mode:
     dict
         Cleaned geographic proportions keyed by the requested level.
     """
-    if isinstance(country_cell, dict):
-        country_dict = dict(country_cell)
-    elif pd.isna(country_cell):
-        return {}
-    else:
-        country_cell = str(country_cell).strip().replace('%', '')
-        if not country_cell:
-            return {}
-        try:
-            country_dict = ast.literal_eval(country_cell)
-        except Exception:
-            return {}
-
-    if not isinstance(country_dict, dict):
-        return {}
-
-    cleaned = {}
-    for key, value in country_dict.items():
-        try:
-            cleaned[str(key).strip()] = float(value)
-        except Exception:
-            continue
-
-    cleaned = rollup_counts_geo(
-            cleaned,
-            geo_dict,
-            mode=mode,
-            drop_unknown=drop_unknown,
-            )
-
-    if sum(cleaned.values()) > 1.0:
-        for key in cleaned:
-            cleaned[key] = round(cleaned[key] / 100, 3)
-    else:
-        for key in cleaned:
-            cleaned[key] = round(cleaned[key], 3)
-
-    return cleaned
+    cleaned = _coerce_metadata_counter(country_cell)
+    rolled = rollup_counts_geo(cleaned, geo_dict, mode=mode, drop_unknown=drop_unknown)
+    return _normalize_distribution_for_export(rolled)
 
 def clean_genotype(genotype_cell: Any) -> dict[str, float]:
     """
@@ -880,37 +871,7 @@ def clean_genotype(genotype_cell: Any) -> dict[str, float]:
     dict
         Cleaned genotype proportions.
     """
-    if isinstance(genotype_cell, dict):
-        genotype_dict = dict(genotype_cell)
-    elif pd.isna(genotype_cell):
-        return {}
-    else:
-        genotype_cell = str(genotype_cell).strip().replace('%', '')
-        if not genotype_cell:
-            return {}
-        try:
-            genotype_dict = ast.literal_eval(genotype_cell)
-        except Exception:
-            return {}
-
-    if not isinstance(genotype_dict, dict):
-        return {}
-
-    cleaned = {}
-    for key, value in genotype_dict.items():
-        try:
-            cleaned[str(key).strip()] = float(value)
-        except Exception:
-            continue
-
-    if sum(cleaned.values()) > 1.0:
-        for key in cleaned:
-            cleaned[key] = round(cleaned[key] / 100, 3)
-    else:
-        for key in cleaned:
-            cleaned[key] = round(cleaned[key], 3)
-
-    return cleaned
+    return _normalize_distribution_for_export(_coerce_metadata_counter(genotype_cell))
 
 def convert_muts(flags: dict, muts_loci_meaning: dict) -> dict[str, str]:
     """
@@ -1714,6 +1675,12 @@ def create_segment_background_table(
     table = """
     <div class="sb-table-wrap">
     <table class="tabela" id="sb-flat-table">
+    <colgroup>
+      <col style="width:84px"><col style="width:68px"><col style="width:80px"><col style="width:76px">
+      <col style="width:100px"><col style="width:56px"><col style="width:112px">
+      <col><col><col>
+      <col style="width:134px">
+    </colgroup>
     <thead>
       <tr>
         <th>Segment</th>
@@ -1795,10 +1762,11 @@ def create_segment_background_table(
             genotype = genotype if isinstance(genotype, dict) else {}
             geo_countries = geo_countries if isinstance(geo_countries, dict) else {}
 
-            host_order = rollup_counts_taxa(host_species, taxa_dict, level='Order', drop_unknown=True)
-            host_class = rollup_counts_taxa(host_species, taxa_dict, level='Class', drop_unknown=True)
-            geo_regions = rollup_counts_geo(geo_countries, geo_dict, mode='region', drop_unknown=True)
-            geo_continents = rollup_counts_geo(geo_countries, geo_dict, mode='continent', drop_unknown=True)
+            # Each level comes from the source cell, not from rounded species/country values.
+            host_order = clean_host(df.loc[row, 'HOST'], taxa_dict, level='Order', drop_unknown=True)
+            host_class = clean_host(df.loc[row, 'HOST'], taxa_dict, level='Class', drop_unknown=True)
+            geo_regions = clean_country(df.loc[row, 'COUNTRY'], geo_dict, mode='region', drop_unknown=True)
+            geo_continents = clean_country(df.loc[row, 'COUNTRY'], geo_dict, mode='continent', drop_unknown=True)
 
         else:
             host_species = df.loc[row, 'HOST']
@@ -1839,10 +1807,11 @@ def create_segment_background_table(
         </tr>
         """
 
-    table += """
+    table += f"""
         </tbody>
         </table>
         </div>
+        {_ZERO_SHARE_NOTE}
     """
 
     return table
@@ -2016,7 +1985,7 @@ html_skeleton = r"""<!DOCTYPE html>
     body{margin:0;font-family:var(--sans);color:var(--fg);background:var(--bg);line-height:1.55}
 
     header{padding:1rem;border-bottom:1px solid var(--border)}
-    .container{max-width:1100px;margin:0 auto;padding:1rem}
+    .container{max-width:1400px;margin:0 auto;padding:1rem}
 
     .tabs{border:1px solid var(--border); border-radius:.75rem; background:#fff; overflow:hidden}
     .tab-controls{display:flex; gap:.5rem; padding:.5rem; border-bottom:1px solid var(--border); background:var(--card); flex-wrap:wrap}
@@ -2053,7 +2022,10 @@ html_skeleton = r"""<!DOCTYPE html>
       clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap;
     }
 
-    #panel2 .sb-card{display:grid; grid-template-rows:auto 1fr; gap:.25rem}
+    #panel2 .sb-card{display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto 1fr; gap:.25rem}
+    .sb-table-wrap{overflow-x:auto}
+    #sb-flat-table{table-layout:fixed; min-width:1040px}
+    #sb-flat-table th, #sb-flat-table td{font-size:.85rem; padding:.4rem; overflow-wrap:anywhere}
     #panel2 .toolbars{display:flex; gap:.75rem; justify-content:flex-end; align-items:center; margin:0 0 .25rem 0; padding-right:.5rem}
     .controls{display:inline-flex; gap:.25rem; align-items:center}
     .controls .group-label{color:var(--muted); font-weight:600; font-size:.85rem; margin-right:.25rem}
@@ -2451,6 +2423,10 @@ html_skeleton_multi = r"""
 
     .tabela tbody tr:hover{background:#fafcff}
 
+    #sb-multi-table{table-layout:fixed; min-width:1160px}
+    #sb-multi-table thead th{white-space:normal}
+    #sb-multi-table th, #sb-multi-table td{font-size:.85rem; padding:8px; overflow-wrap:anywhere}
+
     .len-ok{
       display:inline-block;
       padding:2px 8px;
@@ -2786,6 +2762,12 @@ def create_segment_background_table_multi(
     table = """
     <div class="table-wrap">
     <table class="tabela" id="sb-multi-table">
+    <colgroup>
+      <col style="width:112px"><col style="width:88px"><col style="width:74px"><col style="width:84px">
+      <col style="width:80px"><col style="width:104px"><col style="width:60px"><col style="width:114px">
+      <col><col><col>
+      <col style="width:136px">
+    </colgroup>
     <thead>
       <tr>
         <th style="max-width:2.5cm;min-width:1cm;overflow-wrap:break-word;white-space:normal">Sample Name</th>
@@ -2843,11 +2825,12 @@ def create_segment_background_table_multi(
             genotype = genotype if isinstance(genotype, dict) else {}
             geo_countries = geo_countries if isinstance(geo_countries, dict) else {}
 
-            host_order = rollup_counts_taxa(host_species, taxa_dict, level='Order', drop_unknown=True)
-            host_class = rollup_counts_taxa(host_species, taxa_dict, level='Class', drop_unknown=True)
+            # Each level comes from the source cell, not from rounded species/country values.
+            host_order = clean_host(df.loc[row, 'HOST'], taxa_dict, level='Order', drop_unknown=True)
+            host_class = clean_host(df.loc[row, 'HOST'], taxa_dict, level='Class', drop_unknown=True)
 
-            geo_regions = rollup_counts_geo(geo_countries, geo_dict, mode='region', drop_unknown=True)
-            geo_continents = rollup_counts_geo(geo_countries, geo_dict, mode='continent', drop_unknown=True)
+            geo_regions = clean_country(df.loc[row, 'COUNTRY'], geo_dict, mode='region', drop_unknown=True)
+            geo_continents = clean_country(df.loc[row, 'COUNTRY'], geo_dict, mode='continent', drop_unknown=True)
         else:
             host_species = df.loc[row, 'HOST']
             genotype = df.loc[row, 'GENOTYPE']
@@ -2886,10 +2869,11 @@ def create_segment_background_table_multi(
         </tr>
         """
 
-    table += """
+    table += f"""
     </tbody>
     </table>
     </div>
+    {_ZERO_SHARE_NOTE}
     """
 
     return table

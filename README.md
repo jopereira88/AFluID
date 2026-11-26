@@ -59,7 +59,7 @@ This pipeline will identify nucleotide sequences of influenza A into segments an
 1. The samples will be assigned into clusters using cd-hit-est-2d with an identity thresshold of 99%. These clusters are annotated for segment, genoypes and hosts, therefore metadata completeness is paramount to the reports. The samples that are unassigned to clusters will then be subjected to BLAST against a local database.
 2. BLAST will output the best match, identity and the results will be annotated using sequence metadata. In this case, only one segment, genotype and host will be outputted if available.
 3. Any unassigned samples by BLAST will be outputted so the user is able to perform online BLAST.
-4. The pipeline works with an argparse argument calling system, there are 2 mandatory arguments: *-f/--filename (your_fasta_file_name.fasta)* and *-m/--mode*
+4. The pipeline works with an argparse argument calling system, there are 2 mandatory arguments: *-f/--filename (your_fasta_file_name.fasta)* and *-m/--mode* (*-f* is not needed in batch mode, *-b*)
 
 The pipeline also runs 2 different modes and its behaviour can be altered by several different arguments:
 * Contig mode (_argument: -m/--mode contig_):
@@ -78,6 +78,10 @@ The pipeline also runs 2 different modes and its behaviour can be altered by sev
      Report outputs and exported reference files can be redirected to a custom root directory. Relative paths are resolved from the current working directory; absolute paths are accepted as-is.
 * Output name (*argument: -o/--output_name NAME*):
      In direct single-file runs, this optionally overrides the default output stem used for the output folder and generated report filenames in both ```-ss on``` and ```-ss off``` modes. The name is used exactly as provided, without timestamps or hex suffixes, so an existing target raises an error unless ```--replace``` is used. This option cannot be used with ```--batch``` or ```--batch_fasta```.
+* Batch mode (*argument: -b/--batch*):
+     Runs the pipeline on every FASTA file (```.fasta```, ```.fa```, ```.fna```) found recursively under the ```samples/``` folder, or under the subdirectory given with ```--batch_dir```. Each file is processed as a separate sample with the chosen ```-m``` and ```-ss``` settings, and ```-f/--filename``` is not required. At the end AFluID writes a batch summary TSV (```batch_summary_<batch_name>.tsv```), a batch cluster composition, an HTML batch index and a ZIP of all sample reports at the batch root. ```--batch``` cannot be combined with ```--batch_fasta``` or ```-o/--output_name```.
+* Batch directory (*argument: -bd/--batch_dir SUBDIR*):
+     Restricts batch mode to a subdirectory of ```samples/``` (e.g. ```-bd MY_BATCH_DIR``` scans ```samples/MY_BATCH_DIR/```; nested paths such as ```-bd PROJECT/RUN``` also work). If omitted, the whole ```samples/``` folder is scanned. The run fails if the directory does not exist. Without ```--batch_name```, the batch output directory is named ```<batch_dir>_<YYYYmmdd_HHMMSS>``` (```batch_root_<timestamp>``` when no directory is given, with ```/``` replaced by ```__```).
 * Batch name (*argument: -bn/--batch_name NAME*):
      In batch mode or successful batch-fasta demultiplexing, this defines the batch output directory name. If omitted, AFluID uses the current timestamped batch naming behaviour. If ```--batch_fasta``` falls back to multi-sample mode through ```--force-bf```, ```--batch_name``` is ignored.
 * Batch FASTA demultiplexing (*arguments: -bf/--batch_fasta, --bf-regex REGEX, --force-bf*):
@@ -111,6 +115,24 @@ Sample usage (direct run with a custom output stem and collision checking):
 
 ```bash
 python3 main.py -f SAMPLE_FASTA.fasta -m consensus -ss on -o SAMPLE_ALIAS
+```
+
+Sample usage (batch run over every FASTA file in ```samples/```):
+
+```bash
+python3 main.py -b -m consensus
+```
+
+Sample usage (batch run over the FASTA files in ```samples/MY_BATCH_DIR/```, with a custom batch name):
+
+```bash
+python3 main.py -b -bd MY_BATCH_DIR -m consensus -bn MY_BATCH_NAME
+```
+
+Sample usage (batch run with outputs under a custom directory, replacing a previous batch of the same name):
+
+```bash
+python3 main.py -b -bd MY_BATCH_DIR -m consensus -bn MY_BATCH_NAME --outdir MY_OUTDIR --replace
 ```
 
 Sample usage (demultiplex a multifasta into a temporary batch using a mandatory regex that captures only the sample identifier):
